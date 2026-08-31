@@ -1,0 +1,16 @@
+{
+  "name": "deepwork",
+  "productName": "DeepWork",
+  "version": "0.1.0",
+  "description": "Lock yourself in with the files that matter, for as long as you decide.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "electron": "^44.0.0"
+  }
+}

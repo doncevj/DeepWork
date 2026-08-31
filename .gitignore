@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+build/
+*.p12
+*.cer
+*.mobileprovision
+.env
+.env.*
+.DS_Store
+*.log

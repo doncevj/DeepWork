@@ -1,0 +1,323 @@
+/* ---------------------------------------------------------------------------
+   DeepWork
+   Dark, quiet, and seen for thirty seconds before it gets out of the way.
+   Warm near-black, cream text, sage for anything you can act on.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --ink:         #100F0D;  /* window background */
+  --surface:     #1A1917;  /* panels sitting on the background */
+  --surface-up:  #22211E;  /* hover, and the disabled button */
+  --line:        #2E2C28;  /* hairline borders */
+
+  --text:        #E8E3D9;
+  --muted:       #8B8579;  /* 5.2:1 on ink — still readable, clearly secondary */
+
+  --accent:      #7C8F6F;  /* buttons, links, focus */
+  --accent-lift: #93A585;  /* accent on hover */
+  --accent-dim:  #46503E;  /* text selection */
+  --on-accent:   #12140F;  /* label colour on a sage button — cream only
+                              manages 2.7:1 against the sage, so it goes dark */
+
+  --danger:      #C08A78;  /* warning text, kept in the same warm family */
+
+  --gap: 24px;
+  --radius: 10px;
+  --field-width: 124px;
+}
+
+* { box-sizing: border-box; }
+
+/* `hidden` lives in the browser's own stylesheet, so any rule written here
+   outranks it. Put it back in charge before anything else can override it. */
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+}
+
+.titlebar {
+  height: 38px;
+  -webkit-app-region: drag;
+}
+
+button, input { -webkit-app-region: no-drag; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - 38px);
+  padding: 6px 30px 30px;
+}
+
+.wordmark {
+  margin: 0 0 var(--gap);
+  font-size: 15px;
+  font-weight: 590;
+  letter-spacing: -0.005em;
+}
+
+/* ------------------------------- Files ---------------------------------- */
+
+.dropzone {
+  flex: 1 1 auto;
+  min-height: 120px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-y: auto;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.dropzone.is-hovered {
+  border-color: var(--accent);
+  background: var(--surface-up);
+}
+
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.empty-line {
+  margin: 0;
+  color: var(--muted);
+}
+
+.link {
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.link:hover { color: var(--accent-lift); }
+
+.file-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.file-row:last-child { border-bottom: 0; }
+
+.file-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-kind {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-remove {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.file-remove:hover {
+  background: var(--surface-up);
+  color: var(--text);
+}
+
+.note {
+  margin: 10px 0 0;
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.note.is-warning { color: var(--danger); }
+
+.row {
+  display: flex;
+  min-height: 22px;
+  margin-top: 2px;
+}
+
+/* ------------------------------ Duration --------------------------------
+   Both fields are a fixed width sized to two digits and a unit, and centred
+   as a pair so they sit on the same axis as the button below. Letting them
+   stretch meant `min-width: auto` fell back to the input's 20-character
+   intrinsic width, which shoved the minutes field offscreen.
+   ---------------------------------------------------------------------- */
+
+.duration {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: var(--gap);
+}
+
+.field {
+  flex: none;
+  width: var(--field-width);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 13px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: border-color 120ms ease;
+}
+
+/* The border is the focus indicator here, so the input keeps no outline. */
+.field:focus-within { border-color: var(--accent); }
+
+.field-input {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 27px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+  cursor: text;
+}
+
+.field-input::selection { background: var(--accent-dim); }
+
+.field-label {
+  flex: none;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: text;
+}
+
+/* ------------------------------ Actions --------------------------------- */
+
+.start {
+  margin-top: var(--gap);
+  padding: 13px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-weight: 590;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.start:hover:not(:disabled) { background: var(--accent-lift); }
+
+.start:disabled {
+  background: var(--surface-up);
+  color: var(--muted);
+  cursor: default;
+}
+
+.start-inline { margin-top: 0; padding: 10px 22px; }
+
+.ghost {
+  padding: 10px 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ghost:hover { background: var(--surface-up); }
+
+/* ------------------------------ Confirm --------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  background: rgba(8, 7, 6, 0.74);
+  animation: fade 130ms ease-out;
+}
+
+.sheet {
+  width: 100%;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  animation: rise 150ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.sheet-title {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 590;
+}
+
+.sheet-body {
+  margin: 0 0 20px;
+  color: var(--muted);
+}
+
+.sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@keyframes fade { from { opacity: 0; } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

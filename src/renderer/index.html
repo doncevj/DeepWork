@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+  <title>DeepWork</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <div class="titlebar"></div>
+
+  <main class="screen">
+
+    <h1 class="wordmark">DeepWork</h1>
+
+    <section
+      id="dropzone"
+      class="dropzone"
+      role="group"
+      aria-label="Session files"
+      tabindex="0">
+
+      <div id="empty" class="empty">
+        <p class="empty-line">Drop PDFs or videos here</p>
+        <button id="chooseEmpty" class="link" type="button">Choose files</button>
+      </div>
+
+      <ul id="fileList" class="file-list" hidden></ul>
+    </section>
+
+    <p id="fileNote" class="note" role="status" aria-live="polite"></p>
+
+    <div class="row">
+      <button id="chooseMore" class="link" type="button" hidden>Add more</button>
+    </div>
+
+    <!-- size="2" matters: an input's default size of 20 characters gives it a
+         huge intrinsic width, which is what pushed the minutes field offscreen. -->
+    <section class="duration">
+      <div class="field">
+        <input
+          id="hours"
+          class="field-input"
+          type="text"
+          inputmode="numeric"
+          size="2"
+          maxlength="2"
+          value="0"
+          autocomplete="off"
+          spellcheck="false">
+        <label class="field-label" for="hours">hours</label>
+      </div>
+
+      <div class="field">
+        <input
+          id="minutes"
+          class="field-input"
+          type="text"
+          inputmode="numeric"
+          size="2"
+          maxlength="2"
+          value="0"
+          autocomplete="off"
+          spellcheck="false">
+        <label class="field-label" for="minutes">min</label>
+      </div>
+    </section>
+
+    <button id="start" class="start" type="button" disabled>Start</button>
+
+  </main>
+
+  <div id="confirm" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="sheet">
+      <h2 id="confirmTitle" class="sheet-title">Are you sure?</h2>
+      <p id="confirmBody" class="sheet-body"></p>
+      <div class="sheet-actions">
+        <button id="confirmCancel" class="ghost" type="button">Cancel</button>
+        <button id="confirmStart" class="start start-inline" type="button">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
