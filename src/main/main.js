@@ -1,22 +1,69 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const {
+  app, BrowserWindow, Menu, globalShortcut, ipcMain, dialog, shell, screen
+} = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
+const nativeLockdown = require('./native-lockdown');
+
 // The only file types DeepWork will open. Everything else is rejected here,
-// in the main process, so the window can never talk it into opening something else.
+// in the main process, so a window can never talk it into opening something else.
 const ALLOWED_EXTENSIONS = new Set(['.pdf', '.mp4']);
 
 // Session bounds, in minutes. The fields top out at 12 hours 59 minutes.
 const MIN_MINUTES = 1;
 const MAX_MINUTES = 12 * 60 + 59;
 
-let mainWindow = null;
+// Escape hatch for development. With the lock engaged macOS disables Force
+// Quit, so `npm run dev` runs everything except the lock itself.
+const UNLOCKED = process.env.DEEPWORK_UNLOCKED === '1';
 
-// Authoritative session state. The window renders it; it never owns it.
+// How often to check that macOS is still applying our options.
+const WATCHDOG_MS = 1000;
+
+// Everything reachable from JavaScript that would reveal the desktop or another
+// app. macOS reserves some of these; whichever it refuses get logged at session
+// start rather than failing silently.
+const BLOCKED_SHORTCUTS = [
+  'Command+H', 'Command+Alt+H',        // hide app, hide others
+  'Command+M', 'Command+Alt+M',        // minimise
+  'Command+W', 'Command+Shift+W',      // close window
+  'Command+`', 'Command+Shift+`',      // cycle windows
+  'Command+Alt+I', 'Command+Alt+J',    // devtools
+  'Command+Alt+C',
+  'Command+Alt+Escape',                // force quit
+  'Control+Up', 'Control+Down',        // mission control, app windows
+  'Control+Left', 'Control+Right',     // switch spaces
+  'F3', 'F11'                          // mission control, show desktop
+];
+
+let setupWindow = null;
+let lockdownWindow = null;
+let coverWindows = []; // blank panels over any non-primary display
+let watchdog = null;
+
+// Authoritative session state. Windows render it; they never own it.
 let session = null; // { files, minutes, startedAt, endsAt }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
+// Flipped only by a completed hold on the exit button. Everything that could
+// close the app checks this first, so there is exactly one way out.
+let allowQuit = false;
+
+// Dropping out of a session because of a stray exception is worse than limping
+// on, and a crash that prints nothing is impossible to chase down.
+process.on('uncaughtException', (error) => {
+  console.error('[DeepWork] uncaught exception:', error);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[DeepWork] unhandled rejection:', reason);
+});
+
+/* ---------------------------------------------------------------------------
+   Windows
+   ------------------------------------------------------------------------ */
+
+function createSetupWindow() {
+  setupWindow = new BrowserWindow({
     width: 460,
     height: 560,
     minWidth: 420,
@@ -34,18 +81,230 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  setupWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
-  mainWindow.on('closed', () => { mainWindow = null; });
+  setupWindow.once('ready-to-show', () => setupWindow.show());
+  setupWindow.on('closed', () => { setupWindow = null; });
 
-  // Nothing in this app should ever open a second window or navigate away.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+  guardNavigation(setupWindow);
+}
+
+function createLockdownWindow() {
+  const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
+
+  lockdownWindow = new BrowserWindow({
+    x,
+    y,
+    width,
+    height,
+    frame: false,
+    closable: false,
+    minimizable: false,
+    // Native fullscreen is deliberately off. A fullscreen Space is managed by
+    // AppKit, which takes the presentation options back and lets Cmd+Tab
+    // through. Simple fullscreen fills the screen without creating a Space.
+    fullscreenable: false,
+    show: false,
+    backgroundColor: '#100F0D',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-lockdown.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      devTools: false // no inspector, so no console to call exit from
+    }
+  });
+
+  lockdownWindow.loadFile(path.join(__dirname, '..', 'renderer', 'lockdown.html'));
+
+  lockdownWindow.once('ready-to-show', () => {
+    lockdownWindow.show();
+    lockdownWindow.focus();
+
+    if (UNLOCKED) {
+      console.log('[DeepWork] DEEPWORK_UNLOCKED=1 — lock and shortcut blocking skipped');
+      lockdownWindow.setSimpleFullScreen(true); // still looks right while testing
+      return;
+    }
+
+    engageLockdown();
+  });
+
+  // Recovery, not prevention. With the options engaged this shouldn't fire.
+  lockdownWindow.on('blur', () => {
+    if (UNLOCKED || allowQuit) return;
+
+    setTimeout(() => {
+      if (allowQuit || !lockdownWindow || lockdownWindow.isDestroyed()) return;
+
+      if (nativeLockdown.available && !nativeLockdown.isEngaged()) {
+        nativeLockdown.engage();
+      }
+      app.focus({ steal: true });
+      lockdownWindow.focus();
+    }, 60);
+  });
+
+  // Nothing closes this window except a confirmed exit.
+  lockdownWindow.on('close', (event) => {
+    if (!allowQuit) event.preventDefault();
+  });
+
+  lockdownWindow.on('closed', () => { lockdownWindow = null; });
+
+  guardNavigation(lockdownWindow);
+}
+
+// The lock claims one display. Any others would still show the dock and
+// whatever was already open there, so they get a blank panel.
+function createCoverWindows() {
+  const primaryId = screen.getPrimaryDisplay().id;
+
+  for (const display of screen.getAllDisplays()) {
+    if (display.id === primaryId) continue;
+
+    const { x, y, width, height } = display.bounds;
+    const cover = new BrowserWindow({
+      x,
+      y,
+      width,
+      height,
+      frame: false,
+      closable: false,
+      minimizable: false,
+      focusable: false, // never steals focus from the real window
+      show: false,
+      backgroundColor: '#100F0D',
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        devTools: false
+      }
+    });
+
+    cover.loadFile(path.join(__dirname, '..', 'renderer', 'cover.html'));
+    cover.once('ready-to-show', () => {
+      cover.showInactive();
+      cover.setAlwaysOnTop(true, 'screen-saver');
+      cover.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    });
+
+    cover.on('close', (event) => {
+      if (!allowQuit) event.preventDefault();
+    });
+
+    coverWindows.push(cover);
+  }
+
+  if (coverWindows.length > 0) {
+    console.log(`[DeepWork] covering ${coverWindows.length} extra display(s)`);
+  }
+}
+
+// No window in this app should ever open a second window or navigate away.
+function guardNavigation(win) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (!lockdownWindow) shell.openExternal(url);
     return { action: 'deny' };
   });
-  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+  win.webContents.on('will-navigate', (event) => event.preventDefault());
 }
+
+/* ---------------------------------------------------------------------------
+   Lockdown
+   ------------------------------------------------------------------------ */
+
+// Strips the menu down to Quit alone. Hide, Minimise and Close lose their
+// keyboard shortcuts along with their menu items. Quit stays because
+// 'before-quit' is what turns Cmd+Q into the exit question.
+function applyLockdownMenu() {
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: 'DeepWork', submenu: [{ role: 'quit' }] }
+  ]));
+}
+
+function blockShortcuts() {
+  const refused = [];
+
+  for (const combo of BLOCKED_SHORTCUTS) {
+    let claimed = false;
+    try {
+      claimed = globalShortcut.register(combo, () => {}); // registered and ignored
+    } catch {
+      claimed = false;
+    }
+    if (!claimed) refused.push(combo);
+  }
+
+  if (refused.length > 0) {
+    console.log(`[DeepWork] macOS would not release: ${refused.join(', ')}`);
+  }
+}
+
+function engageLockdown() {
+  // Pre-Lion style fullscreen: fills the screen and drops the titlebar without
+  // creating a Space, so AppKit never takes presentation management over.
+  // Electron sets AutoHideDock|AutoHideMenuBar as part of this, which the
+  // addon then replaces with the full Hide + Disable set.
+  lockdownWindow.setSimpleFullScreen(true);
+  lockdownWindow.setAlwaysOnTop(true, 'screen-saver');
+  lockdownWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+  if (!nativeLockdown.available) {
+    console.log('[DeepWork] no native addon — simple fullscreen only; the dock will auto-hide but Cmd+Tab works');
+    return;
+  }
+
+  const engaged = nativeLockdown.engage();
+  console.log(`[DeepWork] engage() returned ${engaged}`);
+  console.log(`[DeepWork] macOS is applying: ${nativeLockdown.describeOptions()}`);
+
+  startWatchdog();
+}
+
+// Anything that quietly hands presentation back to macOS gets undone within a
+// second. Cheap, and it means one missed edge case isn't a way out.
+function startWatchdog() {
+  stopWatchdog();
+  if (!nativeLockdown.available) return;
+
+  watchdog = setInterval(() => {
+    if (allowQuit || !lockdownWindow || lockdownWindow.isDestroyed()) return;
+    if (nativeLockdown.isEngaged()) return;
+
+    console.log('[DeepWork] options were taken back — re-engaging');
+    nativeLockdown.engage();
+  }, WATCHDOG_MS);
+}
+
+function stopWatchdog() {
+  if (watchdog !== null) clearInterval(watchdog);
+  watchdog = null;
+}
+
+function releaseLockdown() {
+  stopWatchdog();
+  globalShortcut.unregisterAll();
+
+  if (nativeLockdown.available) nativeLockdown.release();
+
+  if (lockdownWindow && !lockdownWindow.isDestroyed() && lockdownWindow.isSimpleFullScreen()) {
+    lockdownWindow.setSimpleFullScreen(false);
+  }
+}
+
+function destroyLockdownWindows() {
+  for (const cover of coverWindows) {
+    if (!cover.isDestroyed()) cover.destroy();
+  }
+  coverWindows = [];
+
+  if (lockdownWindow && !lockdownWindow.isDestroyed()) lockdownWindow.destroy();
+  lockdownWindow = null;
+}
+
+/* ---------------------------------------------------------------------------
+   Files
+   ------------------------------------------------------------------------ */
 
 /**
  * Turn a path into a file record, or null if it isn't something we'll open.
@@ -88,12 +347,40 @@ function describeAll(paths) {
   return { accepted, rejected };
 }
 
+/* ---------------------------------------------------------------------------
+   App lifecycle
+   ------------------------------------------------------------------------ */
+
 app.whenReady().then(() => {
-  createWindow();
+  createSetupWindow();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createSetupWindow();
   });
+});
+
+// Cmd+Q lands here. During a session it is turned into a question for the
+// lockdown window rather than an exit.
+app.on('before-quit', (event) => {
+  if (allowQuit) return;
+  if (!lockdownWindow || lockdownWindow.isDestroyed()) return;
+
+  event.preventDefault();
+  lockdownWindow.focus();
+  lockdownWindow.webContents.send('lockdown:confirm-exit');
+});
+
+// Second layer. Anything that reaches quit without going through the hold
+// stops here too.
+app.on('will-quit', (event) => {
+  if (!allowQuit && lockdownWindow && !lockdownWindow.isDestroyed()) {
+    event.preventDefault();
+    return;
+  }
+
+  stopWatchdog();
+  globalShortcut.unregisterAll();
+  if (nativeLockdown.available) nativeLockdown.release();
 });
 
 app.on('window-all-closed', () => {
@@ -101,12 +388,11 @@ app.on('window-all-closed', () => {
 });
 
 /* ---------------------------------------------------------------------------
-   IPC
+   IPC — setup window
    ------------------------------------------------------------------------ */
 
-// Open the macOS file picker.
 ipcMain.handle('files:choose', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog(setupWindow, {
     title: 'Choose files for this session',
     buttonLabel: 'Add',
     properties: ['openFile', 'multiSelections'],
@@ -119,7 +405,6 @@ ipcMain.handle('files:choose', async () => {
   return describeAll(result.filePaths);
 });
 
-// Validate paths that arrived by drag and drop.
 ipcMain.handle('files:validate', async (_event, paths) => {
   if (!Array.isArray(paths)) return { accepted: [], rejected: 0 };
   return describeAll(paths);
@@ -127,6 +412,8 @@ ipcMain.handle('files:validate', async (_event, paths) => {
 
 // Begin a session. Everything is re-checked here; the window's word isn't taken for it.
 ipcMain.handle('session:start', async (_event, request) => {
+  if (lockdownWindow) return { ok: false, error: 'A session is already running.' };
+
   const minutes = Number(request?.minutes);
   const paths = Array.isArray(request?.files) ? request.files : [];
 
@@ -147,9 +434,44 @@ ipcMain.handle('session:start', async (_event, request) => {
     endsAt: startedAt + minutes * 60_000
   };
 
-  // Next step hooks in here: kiosk mode, always-on-top, close interception,
-  // shortcut blocking, and the file viewer.
-  console.log(`[DeepWork] would start — ${accepted.length} file(s), ${minutes} min`);
+  applyLockdownMenu();
+  if (!UNLOCKED) blockShortcuts();
+  createLockdownWindow();
+  createCoverWindows();
 
-  return { ok: true, endsAt: session.endsAt, files: accepted, minutes };
+  // Deferred on purpose. This handler's reply is delivered to the setup window,
+  // so tearing it down before returning leaves Electron sending a reply to a
+  // window that no longer exists — which throws, and takes the app with it.
+  setImmediate(() => {
+    if (setupWindow && !setupWindow.isDestroyed()) setupWindow.destroy();
+    setupWindow = null;
+  });
+
+  console.log(`[DeepWork] locked — ${accepted.length} file(s), ${minutes} min`);
+  return { ok: true };
+});
+
+/* ---------------------------------------------------------------------------
+   IPC — lockdown window
+   ------------------------------------------------------------------------ */
+
+ipcMain.handle('lockdown:session', () => {
+  if (!session) return null;
+  return { files: session.files, minutes: session.minutes, endsAt: session.endsAt };
+});
+
+// The single exit, reached only after a completed 30 second hold. The window
+// runs the timer; this just trusts it, because the window is our own code and
+// has no console to be driven from.
+ipcMain.handle('lockdown:exit', () => {
+  allowQuit = true;
+  releaseLockdown();
+
+  console.log('[DeepWork] exited by completed hold');
+
+  // Same reasoning as above: let this handler reply before the window goes.
+  setImmediate(() => {
+    destroyLockdownWindows();
+    app.quit();
+  });
 });

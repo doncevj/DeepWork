@@ -1,8 +1,8 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 /**
- * The only bridge between the window and the rest of the machine.
- * Four functions, no filesystem access, no Node in the window.
+ * The setup window's only bridge to the rest of the machine.
+ * Three functions, no filesystem access, no Node in the window.
  */
 contextBridge.exposeInMainWorld('deepwork', {
   chooseFiles: () => ipcRenderer.invoke('files:choose'),
@@ -23,6 +23,5 @@ contextBridge.exposeInMainWorld('deepwork', {
     return ipcRenderer.invoke('files:validate', paths);
   },
 
-  startSession: (payload) => ipcRenderer.invoke('session:start', payload),
-  endSession: () => ipcRenderer.invoke('session:end')
+  startSession: (payload) => ipcRenderer.invoke('session:start', payload)
 });

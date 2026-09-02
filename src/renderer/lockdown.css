@@ -1,0 +1,69 @@
+/* ---------------------------------------------------------------------------
+   DeepWork — lockdown screen.
+   Loads after styles.css and uses the same palette; this file only adds the
+   full-screen stage, the hold control, and a sensible dialog width.
+   ------------------------------------------------------------------------ */
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 12px;
+  padding: 40px;
+  text-align: center;
+}
+
+.stage-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 590;
+}
+
+.stage-files {
+  margin: 0;
+  max-width: 640px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.stage-hint {
+  position: absolute;
+  bottom: 30px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--line);
+}
+
+/* The shared .sheet is full-width, which is right in a 460px window and absurd
+   across a whole display. */
+.overlay .sheet {
+  max-width: 400px;
+}
+
+/* Go Back is a plain button; Exit carries a counter above it. Bottom-aligning
+   the row keeps the two buttons on the same line. */
+.overlay .sheet-actions {
+  align-items: flex-end;
+}
+
+.hold {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.hold-counter {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums; /* so the width doesn't twitch each second */
+}
+
+/* Enough feedback to show the hold registered, without turning the countdown
+   into a progress bar. */
+.start.is-holding {
+  background: var(--accent-lift);
+}

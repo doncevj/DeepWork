@@ -5,12 +5,14 @@
   "description": "Lock yourself in with the files that matter, for as long as you decide.",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dev": "DEEPWORK_UNLOCKED=1 electron ."
   },
   "author": "",
   "license": "UNLICENSED",
   "private": true,
   "devDependencies": {
-    "electron": "^44.0.0"
+    "electron": "^44.0.0",
+    "node-addon-api": "^8.9.2"
   }
 }

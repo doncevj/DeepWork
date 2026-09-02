@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+  <title>DeepWork</title>
+  <!-- styles.css first: the palette and the shared button and dialog styles
+       live there, and lockdown.css only adds what this screen needs. -->
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="lockdown.css">
+</head>
+<body>
+
+  <main class="stage">
+    <p class="stage-title">Locked in</p>
+    <p id="stageFiles" class="stage-files"></p>
+
+    <p class="stage-hint">Press &#8984;Q to exit</p>
+  </main>
+
+  <div id="exitDialog" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="exitTitle">
+    <div class="sheet">
+      <h2 id="exitTitle" class="sheet-title">Are you sure you want to exit?</h2>
+
+      <div class="sheet-actions">
+        <button id="goBack" class="ghost" type="button">Go Back</button>
+
+        <div class="hold">
+          <p id="holdCounter" class="hold-counter" role="status" aria-live="off">30 seconds</p>
+          <button id="doExit" class="start start-inline" type="button">Exit</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="lockdown.js"></script>
+</body>
+</html>
