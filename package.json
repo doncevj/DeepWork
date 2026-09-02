@@ -14,5 +14,8 @@
   "devDependencies": {
     "electron": "^44.0.0",
     "node-addon-api": "^8.9.2"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^6.3.289"
   }
 }

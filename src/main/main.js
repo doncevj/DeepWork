@@ -5,6 +5,10 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const nativeLockdown = require('./native-lockdown');
+const fileProtocol = require('./file-protocol');
+
+// Must happen before the app is ready.
+fileProtocol.registerScheme();
 
 // The only file types DeepWork will open. Everything else is rejected here,
 // in the main process, so a window can never talk it into opening something else.
@@ -106,11 +110,15 @@ function createLockdownWindow() {
       preload: path.join(__dirname, 'preload-lockdown.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: false // no inspector, so no console to call exit from
+      // Off during a real session so there's no console to call exit from;
+      // on under `npm run dev` so the viewer can actually be debugged.
+      devTools: UNLOCKED
     }
   });
 
-  lockdownWindow.loadFile(path.join(__dirname, '..', 'renderer', 'lockdown.html'));
+  // Served over lockdown:// rather than loadFile. Chromium won't start a Web
+  // Worker on a file:// page, and pdf.js needs one.
+  lockdownWindow.loadURL('lockdown://app/lockdown.html');
 
   lockdownWindow.once('ready-to-show', () => {
     lockdownWindow.show();
@@ -196,13 +204,18 @@ function createCoverWindows() {
   }
 }
 
-// No window in this app should ever open a second window or navigate away.
+// No window in this app should ever open a second window, and the only
+// navigation allowed is the lockdown window's own asset origin.
 function guardNavigation(win) {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (!lockdownWindow) shell.openExternal(url);
     return { action: 'deny' };
   });
-  win.webContents.on('will-navigate', (event) => event.preventDefault());
+
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('lockdown://app/')) return;
+    event.preventDefault();
+  });
 }
 
 /* ---------------------------------------------------------------------------
@@ -280,6 +293,7 @@ function stopWatchdog() {
 function releaseLockdown() {
   stopWatchdog();
   globalShortcut.unregisterAll();
+  fileProtocol.clearAllowlist();
 
   if (nativeLockdown.available) nativeLockdown.release();
 
@@ -348,6 +362,7 @@ function describeAll(paths) {
    ------------------------------------------------------------------------ */
 
 app.whenReady().then(() => {
+  fileProtocol.registerHandler();
   createSetupWindow();
 
   app.on('activate', () => {
@@ -417,10 +432,15 @@ ipcMain.handle('session:start', async (_event, request) => {
     return { ok: false, error: 'None of those files could be opened. Add at least one PDF or MP4.' };
   }
 
+  // Ids are what the lockdown window sees. Paths stay in the main process.
+  const files = accepted.map((file, index) => ({ ...file, id: `f${index}` }));
+
   session = {
-    files: accepted,
+    files,
     startedAt: Date.now()
   };
+
+  fileProtocol.setAllowlist(files);
 
   applyLockdownMenu();
   if (!UNLOCKED) blockShortcuts();
@@ -443,9 +463,14 @@ ipcMain.handle('session:start', async (_event, request) => {
    IPC — lockdown window
    ------------------------------------------------------------------------ */
 
+// Deliberately without paths. The window works in ids; only the protocol
+// handler can turn one back into somewhere on disk.
 ipcMain.handle('lockdown:session', () => {
   if (!session) return null;
-  return { files: session.files };
+
+  return {
+    files: session.files.map(({ id, name, kind, bytes }) => ({ id, name, kind, bytes }))
+  };
 });
 
 // The single exit, reached only after a completed 30 second hold. The window

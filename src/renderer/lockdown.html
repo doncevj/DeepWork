@@ -2,23 +2,55 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- Served from lockdown://app, so 'self' is a real origin here. blob: is
+       for the pdf.js worker; lockdown: is for the session files themselves. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+        content="default-src 'none';
+                 script-src 'self' blob:;
+                 style-src 'self';
+                 img-src 'self' data: blob:;
+                 media-src 'self' lockdown: blob:;
+                 connect-src 'self' lockdown: blob: data:;
+                 worker-src 'self' blob:;
+                 font-src 'self' data:;">
   <title>DeepWork</title>
-  <!-- styles.css first: the palette and the shared button and dialog styles
-       live there, and lockdown.css only adds what this screen needs. -->
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="lockdown.css">
 </head>
 <body>
 
-  <main class="stage">
-    <p class="stage-title">Locked in</p>
-    <p id="stageFiles" class="stage-files"></p>
-
+  <!-- ============================= Home ============================= -->
+  <main id="home" class="home">
+    <div class="home-inner">
+      <h1 class="home-title">DeepWork</h1>
+      <p class="home-sub">Choose something to open.</p>
+      <ul id="homeList" class="home-list"></ul>
+    </div>
     <p class="stage-hint">Press &#8984;Q to exit</p>
   </main>
 
+  <!-- ============================ Viewer ============================ -->
+  <section id="viewer" class="viewer" hidden>
+    <header class="bar">
+      <button id="homeButton" class="bar-button" type="button">Home</button>
+
+      <p id="viewerTitle" class="bar-title"></p>
+
+      <div id="zoomControls" class="zoom" hidden>
+        <button id="zoomOut" class="bar-button" type="button" aria-label="Zoom out">&#8722;</button>
+        <span id="zoomLevel" class="zoom-level">100%</span>
+        <button id="zoomIn" class="bar-button" type="button" aria-label="Zoom in">+</button>
+      </div>
+    </header>
+
+    <div id="pdfScroll" class="pdf-scroll" tabindex="0">
+      <div id="pdfPages" class="pdf-pages"></div>
+    </div>
+
+    <p id="viewerStatus" class="viewer-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <!-- ============================ Exit ============================= -->
   <div id="exitDialog" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="exitTitle">
     <div class="sheet">
       <h2 id="exitTitle" class="sheet-title">Are you sure you want to exit?</h2>
@@ -34,6 +66,6 @@
     </div>
   </div>
 
-  <script src="lockdown.js"></script>
+  <script type="module" src="lockdown.js"></script>
 </body>
 </html>

@@ -1,31 +1,80 @@
 /* ---------------------------------------------------------------------------
    DeepWork — lockdown screen.
-   Loads after styles.css and uses the same palette; this file only adds the
-   full-screen stage, the hold control, and a sensible dialog width.
+   Loads after styles.css and uses the same palette. Two screens live here:
+   a list of what's in the session, and the reader.
    ------------------------------------------------------------------------ */
 
-.stage {
+html, body { overflow: hidden; }
+
+/* --------------------------------- Home ---------------------------------- */
+
+.home {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100vh;
-  gap: 12px;
-  padding: 40px;
-  text-align: center;
+  padding: 48px;
 }
 
-.stage-title {
+.home-inner {
+  width: 100%;
+  max-width: 560px;
+}
+
+.home-title {
   margin: 0;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 590;
 }
 
-.stage-files {
-  margin: 0;
-  max-width: 640px;
+.home-sub {
+  margin: 4px 0 26px;
   color: var(--muted);
-  line-height: 1.7;
+}
+
+.home-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 52vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.home-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 15px 18px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 110ms ease;
+}
+
+.home-item:last-child { border-bottom: 0; }
+.home-item:hover { background: var(--surface-up); }
+
+.home-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-meta {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .stage-hint {
@@ -36,14 +85,113 @@
   color: var(--line);
 }
 
-/* The shared .sheet is full-width, which is right in a 460px window and absurd
-   across a whole display. */
+/* -------------------------------- Viewer --------------------------------- */
+
+.viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ink);
+}
+
+.bar-button {
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: background-color 110ms ease;
+}
+
+.bar-button:hover { background: var(--surface-up); }
+
+.bar-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.zoom {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.zoom-level {
+  min-width: 46px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------ PDF pages -------------------------------- */
+
+.pdf-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  outline: none;
+  /* Momentum scrolling makes a long textbook feel like paper rather than a
+     list of images. */
+  -webkit-overflow-scrolling: touch;
+}
+
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+}
+
+.pdf-page {
+  position: relative;
+  flex: none;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.pdf-page canvas {
+  display: block;
+}
+
+.viewer-status {
+  flex: none;
+  margin: 0;
+  padding: 0 16px 10px;
+  min-height: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.viewer-status.is-warning { color: var(--danger); }
+
+/* -------------------------------- Exit ----------------------------------- */
+
 .overlay .sheet {
   max-width: 400px;
 }
 
-/* Go Back is a plain button; Exit carries a counter above it. Bottom-aligning
-   the row keeps the two buttons on the same line. */
 .overlay .sheet-actions {
   align-items: flex-end;
 }
