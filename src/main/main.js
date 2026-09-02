@@ -10,10 +10,6 @@ const nativeLockdown = require('./native-lockdown');
 // in the main process, so a window can never talk it into opening something else.
 const ALLOWED_EXTENSIONS = new Set(['.pdf', '.mp4']);
 
-// Session bounds, in minutes. The fields top out at 12 hours 59 minutes.
-const MIN_MINUTES = 1;
-const MAX_MINUTES = 12 * 60 + 59;
-
 // Escape hatch for development. With the lock engaged macOS disables Force
 // Quit, so `npm run dev` runs everything except the lock itself.
 const UNLOCKED = process.env.DEEPWORK_UNLOCKED === '1';
@@ -43,7 +39,7 @@ let coverWindows = []; // blank panels over any non-primary display
 let watchdog = null;
 
 // Authoritative session state. Windows render it; they never own it.
-let session = null; // { files, minutes, startedAt, endsAt }
+let session = null; // { files, startedAt }
 
 // Flipped only by a completed hold on the exit button. Everything that could
 // close the app checks this first, so there is exactly one way out.
@@ -65,9 +61,9 @@ process.on('unhandledRejection', (reason) => {
 function createSetupWindow() {
   setupWindow = new BrowserWindow({
     width: 460,
-    height: 560,
+    height: 500,
     minWidth: 420,
-    minHeight: 500,
+    minHeight: 420,
     show: false,
     // Matches --ink in styles.css. Without this the window paints the default
     // white for a frame before the stylesheet lands, which reads as a flash.
@@ -414,24 +410,16 @@ ipcMain.handle('files:validate', async (_event, paths) => {
 ipcMain.handle('session:start', async (_event, request) => {
   if (lockdownWindow) return { ok: false, error: 'A session is already running.' };
 
-  const minutes = Number(request?.minutes);
   const paths = Array.isArray(request?.files) ? request.files : [];
-
-  if (!Number.isInteger(minutes) || minutes < MIN_MINUTES || minutes > MAX_MINUTES) {
-    return { ok: false, error: 'Set a length between 1 minute and 12 hours 59 minutes.' };
-  }
 
   const { accepted } = describeAll(paths);
   if (accepted.length === 0) {
     return { ok: false, error: 'None of those files could be opened. Add at least one PDF or MP4.' };
   }
 
-  const startedAt = Date.now();
   session = {
     files: accepted,
-    minutes,
-    startedAt,
-    endsAt: startedAt + minutes * 60_000
+    startedAt: Date.now()
   };
 
   applyLockdownMenu();
@@ -447,7 +435,7 @@ ipcMain.handle('session:start', async (_event, request) => {
     setupWindow = null;
   });
 
-  console.log(`[DeepWork] locked — ${accepted.length} file(s), ${minutes} min`);
+  console.log(`[DeepWork] locked — ${accepted.length} file(s)`);
   return { ok: true };
 });
 
@@ -457,7 +445,7 @@ ipcMain.handle('session:start', async (_event, request) => {
 
 ipcMain.handle('lockdown:session', () => {
   if (!session) return null;
-  return { files: session.files, minutes: session.minutes, endsAt: session.endsAt };
+  return { files: session.files };
 });
 
 // The single exit, reached only after a completed 30 second hold. The window

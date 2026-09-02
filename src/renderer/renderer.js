@@ -12,8 +12,6 @@ const el = {
   fileNote:    $('fileNote'),
   chooseEmpty: $('chooseEmpty'),
   chooseMore:  $('chooseMore'),
-  hours:       $('hours'),
-  minutes:     $('minutes'),
   start:       $('start'),
 
   confirm:       $('confirm'),
@@ -22,75 +20,7 @@ const el = {
   confirmCancel: $('confirmCancel')
 };
 
-const HOUR_MAX = 12;
-const MINUTE_MAX = 59;
-
 let files = [];
-
-/* ------------------------------ Duration --------------------------------
-   Digits only, clamped as you type so the field can never show a length the
-   app would refuse. Empty reads as zero while typing and normalises on blur.
-   ---------------------------------------------------------------------- */
-
-function bindDurationField(input, max, { advanceTo = null } = {}) {
-  function read() {
-    const digits = input.value.replace(/\D/g, '');
-    return digits === '' ? 0 : Math.min(max, Number(digits));
-  }
-
-  input.addEventListener('input', () => {
-    const digits = input.value.replace(/\D/g, '').slice(0, 2);
-    const next = digits === '' ? '' : String(Math.min(max, Number(digits)));
-
-    if (next !== input.value) input.value = next;
-    refreshStart();
-
-    // Two digits is as far as either field goes, so move on rather than
-    // silently swallowing the next keystroke.
-    if (advanceTo && digits.length === 2) advanceTo.focus();
-  });
-
-  // Click in and type — the old value is replaced instead of appended to.
-  input.addEventListener('focus', () => input.select());
-
-  input.addEventListener('blur', () => {
-    input.value = String(read());
-    refreshStart();
-  });
-
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      input.blur();
-      return;
-    }
-
-    const step = { ArrowUp: 1, ArrowDown: -1 }[event.key];
-    if (step === undefined) return;
-
-    event.preventDefault();
-    input.value = String(Math.min(max, Math.max(0, read() + step)));
-    refreshStart();
-  });
-
-  return { get value() { return read(); } };
-}
-
-const hours = bindDurationField(el.hours, HOUR_MAX, { advanceTo: el.minutes });
-const minutes = bindDurationField(el.minutes, MINUTE_MAX);
-
-function totalMinutes() {
-  return hours.value * 60 + minutes.value;
-}
-
-function formatDuration(total) {
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-
-  const hourText = h > 0 ? `${h} ${h === 1 ? 'hour' : 'hours'}` : '';
-  const minuteText = m > 0 ? `${m} ${m === 1 ? 'minute' : 'minutes'}` : '';
-
-  return [hourText, minuteText].filter(Boolean).join(' ');
-}
 
 /* -------------------------------- Files ---------------------------------- */
 
@@ -122,18 +52,13 @@ function setNote(text, isWarning = false) {
   el.fileNote.classList.toggle('is-warning', isWarning);
 }
 
-// Start needs both a file and a length. Zero and zero is the resting state of
-// the fields, so it can't count as a choice.
-function refreshStart() {
-  el.start.disabled = files.length === 0 || totalMinutes() === 0;
-}
-
 function render() {
   const hasFiles = files.length > 0;
 
   el.empty.hidden = hasFiles;
   el.fileList.hidden = !hasFiles;
   el.chooseMore.hidden = !hasFiles;
+  el.start.disabled = !hasFiles;
 
   el.fileList.textContent = '';
 
@@ -160,8 +85,6 @@ function render() {
     row.append(name, kind, remove);
     el.fileList.append(row);
   }
-
-  refreshStart();
 }
 
 async function chooseFiles() {
@@ -211,8 +134,7 @@ el.dropzone.addEventListener('drop', async (event) => {
 function openConfirm() {
   const count = files.length;
   el.confirmBody.textContent =
-    `You'll be locked in with ${count} ${count === 1 ? 'file' : 'files'} ` +
-    `for ${formatDuration(totalMinutes())}.`;
+    `You'll be locked in with ${count} ${count === 1 ? 'file' : 'files'}.`;
 
   el.confirm.hidden = false;
   el.confirmStart.focus();
@@ -236,18 +158,12 @@ document.addEventListener('keydown', (event) => {
 
 el.confirmStart.addEventListener('click', async () => {
   const response = await window.deepwork.startSession({
-    files: files.map((f) => f.path),
-    minutes: totalMinutes()
+    files: files.map((f) => f.path)
   });
 
   closeConfirm();
 
-  if (!response.ok) {
-    setNote(response.error, true);
-    return;
-  }
-
-  // Deliberately nothing yet. Lockdown and the file viewer hook in here.
+  if (!response.ok) setNote(response.error, true);
 });
 
 render();
