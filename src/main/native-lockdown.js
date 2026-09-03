@@ -4,6 +4,10 @@
    The addon is optional. If it hasn't been built, the app still runs — it just
    falls back to simple fullscreen alone, which leaves Cmd+Tab working. Failing
    loudly here beats failing silently at the moment someone starts a session.
+
+   In a packaged app the binary lives beside the archive rather than inside it,
+   because dlopen can't read into an asar. Electron usually redirects that
+   itself, but checking both costs nothing and saves a debugging session.
    ------------------------------------------------------------------------ */
 
 const path = require('node:path');
@@ -25,18 +29,32 @@ const OPTION_NAMES = [
   [1 << 12, 'DisableCursorLocationAssistance']
 ];
 
+const ASAR = `${path.sep}app.asar${path.sep}`;
+const UNPACKED = `${path.sep}app.asar.unpacked${path.sep}`;
+
+function searchPaths() {
+  const root = path.join(__dirname, '..', '..');
+
+  const inside = [
+    path.join(root, 'build', 'Release', 'lockdown.node'),
+    path.join(root, 'build', 'Debug', 'lockdown.node')
+  ];
+
+  // A no-op when running from source, since there's no app.asar in the path.
+  const outside = inside.map((candidate) => candidate.replace(ASAR, UNPACKED));
+
+  return [...new Set([...inside, ...outside])];
+}
+
 let native = null;
+let loadedFrom = null;
 let loadError = null;
 
 if (process.platform === 'darwin') {
-  const candidates = [
-    path.join(__dirname, '..', '..', 'build', 'Release', 'lockdown.node'),
-    path.join(__dirname, '..', '..', 'build', 'Debug', 'lockdown.node')
-  ];
-
-  for (const candidate of candidates) {
+  for (const candidate of searchPaths()) {
     try {
       native = require(candidate);
+      loadedFrom = candidate;
       break;
     } catch (error) {
       loadError = error;
@@ -45,9 +63,11 @@ if (process.platform === 'darwin') {
 }
 
 if (native) {
-  console.log('[DeepWork] native lockdown loaded');
+  console.log(`[DeepWork] native lockdown loaded from ${loadedFrom}`);
 } else if (process.platform === 'darwin') {
   console.log(`[DeepWork] native lockdown unavailable — ${loadError?.message ?? 'not built'}`);
+  console.log('[DeepWork] looked in:');
+  for (const candidate of searchPaths()) console.log(`[DeepWork]   ${candidate}`);
   console.log('[DeepWork] run `npx node-gyp rebuild` to build it');
 }
 
@@ -66,6 +86,7 @@ function describeOptions() {
 
 module.exports = {
   available: native !== null,
+  loadedFrom,
   engage: () => (native ? native.engage() : false),
   release: () => (native ? native.release() : false),
   isEngaged: () => (native ? native.isEngaged() : false),

@@ -1,0 +1,48 @@
+# electron-builder configuration.
+#
+# Two things here are load-bearing and easy to get wrong:
+#
+#   1. buildResources is moved off the default `build/` directory, because
+#      node-gyp already owns that path. Leaving it as the default makes
+#      electron-builder treat the compiled addon as a build resource and
+#      exclude it from the app.
+#
+#   2. asarUnpack keeps lockdown.node outside the archive. dlopen cannot read
+#      into an asar, so without this the app builds, launches, and quietly
+#      falls back to "no native addon" — which means Cmd+Tab works again.
+
+appId: com.deepwork.app
+productName: DeepWork
+
+directories:
+  buildResources: resources
+  output: dist
+
+# Explicit rather than the default sweep, which would drag in the node-gyp
+# intermediates — hundreds of megabytes of object files nobody needs.
+files:
+  - package.json
+  - src/main/**/*
+  - src/renderer/**/*
+  - build/Release/lockdown.node
+  - node_modules/**/*
+
+  # pdfjs-dist ships 35 MB; we serve exactly two files out of it.
+  - "!node_modules/pdfjs-dist/legacy/**"
+  - "!node_modules/pdfjs-dist/web/**"
+  - "!node_modules/pdfjs-dist/types/**"
+  - "!node_modules/pdfjs-dist/image_decoders/**"
+  - "!node_modules/**/*.map"
+
+asarUnpack:
+  - build/Release/*.node
+
+mac:
+  category: public.app-category.productivity
+  icon: resources/icon.png
+  # Both are for notarised builds. Local builds don't need them, and turning
+  # them on without a Developer ID just makes the build fail.
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  target:
+    - dmg
