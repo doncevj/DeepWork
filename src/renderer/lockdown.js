@@ -20,6 +20,10 @@ const DEFAULT_ZOOM_INDEX = 3;
 // Render this far outside the viewport, measured in viewport heights.
 const RENDER_MARGIN = '150% 0px';
 
+// Matches the padding and gap on .pdf-pages, so a jump lands the page top just
+// inside the viewport rather than flush against the bar.
+const PAGE_GUTTER = 14;
+
 const $ = (id) => document.getElementById(id);
 
 const el = {
@@ -30,6 +34,10 @@ const el = {
   homeButton:  $('homeButton'),
   viewerTitle: $('viewerTitle'),
   status:      $('viewerStatus'),
+
+  pageControls: $('pageControls'),
+  pageInput:    $('pageInput'),
+  pageTotal:    $('pageTotal'),
 
   zoomControls: $('zoomControls'),
   zoomOut:      $('zoomOut'),
@@ -82,17 +90,27 @@ async function buildHome() {
   }
 }
 
+// Swap the screens first. If tearing the document down goes wrong, the reader
+// still gets their list back rather than being stuck staring at a dead page.
 function showHome() {
-  closeDocument();
   el.viewer.hidden = true;
   el.home.hidden = false;
+
+  try {
+    closeDocument();
+  } catch (error) {
+    console.error('[DeepWork] closing the document failed', error);
+  }
 }
 
 function showViewer(file) {
   el.home.hidden = true;
   el.viewer.hidden = false;
   el.viewerTitle.textContent = file.name;
-  el.zoomControls.hidden = file.kind !== 'PDF';
+
+  const isPdf = file.kind === 'PDF';
+  el.zoomControls.hidden = !isPdf;
+  el.pageControls.hidden = !isPdf;
 }
 
 function setStatus(text, isWarning = false) {
@@ -123,41 +141,64 @@ el.homeButton.addEventListener('click', showHome);
 let doc = null;              // current PDFDocumentProxy
 let pageEls = [];            // one wrapper div per page
 let renderTasks = new Map(); // page index -> RenderTask, so zoom can cancel them
-let observer = null;
+let renderObserver = null;   // decides what gets drawn
+let pageObserver = null;     // decides what the page field says
+let visiblePages = new Set();
 let basePageSize = null;     // { width, height } of page 1 at scale 1
 let fitScale = 1;            // scale at which page 1 fills the column
 let zoomIndex = DEFAULT_ZOOM_INDEX;
+
+// Bumped on every close, so an open that's still in flight can tell it's stale
+// and stop rather than painting over whatever the reader moved on to.
+let openToken = 0;
 
 function currentScale() {
   return fitScale * ZOOM_STEPS[zoomIndex];
 }
 
 function closeDocument() {
-  if (observer) {
-    observer.disconnect();
-    observer = null;
-  }
+  openToken += 1;
 
-  for (const task of renderTasks.values()) task.cancel();
+  for (const observer of [renderObserver, pageObserver]) {
+    try {
+      observer?.disconnect();
+    } catch { /* already gone */ }
+  }
+  renderObserver = null;
+  pageObserver = null;
+
+  for (const task of renderTasks.values()) {
+    try {
+      task.cancel();
+    } catch { /* already finished */ }
+  }
   renderTasks.clear();
+  visiblePages.clear();
 
   if (doc) {
-    doc.destroy();
+    const closing = doc;
     doc = null;
+    // Detached so a rejection here can't take the caller down with it.
+    Promise.resolve().then(() => closing.destroy()).catch(() => {});
   }
 
   pageEls = [];
   basePageSize = null;
   el.pdfPages.textContent = '';
+  el.pageTotal.textContent = '';
+  el.pageInput.value = '1';
   setStatus('');
 }
 
 async function openPdf(file) {
   closeDocument();
+  const token = openToken;
+
   setStatus('Opening…');
 
+  let opened;
   try {
-    doc = await pdfjs.getDocument({
+    opened = await pdfjs.getDocument({
       url: `lockdown://file/${encodeURIComponent(file.id)}`,
       // Let the protocol's range support do the work rather than pulling a
       // 200MB textbook down before showing page one.
@@ -165,30 +206,45 @@ async function openPdf(file) {
       disableStream: false
     }).promise;
   } catch (error) {
+    if (token !== openToken) return;
     setStatus(`Could not open this PDF — ${error?.message ?? 'unknown error'}`, true);
     return;
   }
 
+  // The reader may have hit Home while that was loading.
+  if (token !== openToken) {
+    opened.destroy().catch(() => {});
+    return;
+  }
+
+  doc = opened;
+
   const first = await doc.getPage(1);
+  if (token !== openToken) return;
+
   const viewport = first.getViewport({ scale: 1 });
   basePageSize = { width: viewport.width, height: viewport.height };
 
   zoomIndex = DEFAULT_ZOOM_INDEX;
   measureFit();
   buildPages();
+
+  el.pageTotal.textContent = `/ ${doc.numPages}`;
+  el.pageInput.value = '1';
   setStatus(`${doc.numPages} ${doc.numPages === 1 ? 'page' : 'pages'}`);
 }
 
 // Width the column has to play with, minus the padding on .pdf-pages.
 function measureFit() {
   if (!basePageSize) return;
-  const available = Math.max(200, el.pdfScroll.clientWidth - 28);
+  const available = Math.max(200, el.pdfScroll.clientWidth - PAGE_GUTTER * 2);
   fitScale = available / basePageSize.width;
 }
 
 function buildPages() {
   el.pdfPages.textContent = '';
   pageEls = [];
+  visiblePages.clear();
 
   const scale = currentScale();
 
@@ -211,9 +267,10 @@ function buildPages() {
 }
 
 function observePages() {
-  if (observer) observer.disconnect();
+  renderObserver?.disconnect();
+  pageObserver?.disconnect();
 
-  observer = new IntersectionObserver((entries) => {
+  renderObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const index = Number(entry.target.dataset.index);
       if (entry.isIntersecting) renderPage(index);
@@ -221,13 +278,28 @@ function observePages() {
     }
   }, { root: el.pdfScroll, rootMargin: RENDER_MARGIN });
 
-  for (const wrapper of pageEls) observer.observe(wrapper);
+  // A second, tight observer just for "which page am I on". Reusing the render
+  // one would report pages far off screen, since its margin is deliberately huge.
+  pageObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const index = Number(entry.target.dataset.index);
+      if (entry.isIntersecting) visiblePages.add(index);
+      else visiblePages.delete(index);
+    }
+    paintPageNumber();
+  }, { root: el.pdfScroll, rootMargin: '0px' });
+
+  for (const wrapper of pageEls) {
+    renderObserver.observe(wrapper);
+    pageObserver.observe(wrapper);
+  }
 }
 
 async function renderPage(index) {
   const wrapper = pageEls[index];
-  if (!wrapper || wrapper.dataset.rendered === 'yes' || renderTasks.has(index)) return;
+  if (!doc || !wrapper || wrapper.dataset.rendered === 'yes' || renderTasks.has(index)) return;
 
+  const token = openToken;
   const scale = currentScale();
   const ratio = window.devicePixelRatio || 1;
 
@@ -239,7 +311,7 @@ async function renderPage(index) {
   }
 
   // The document may have been closed or zoomed while that await was pending.
-  if (!doc || pageEls[index] !== wrapper || scale !== currentScale()) return;
+  if (token !== openToken || !doc || pageEls[index] !== wrapper || scale !== currentScale()) return;
 
   const viewport = page.getViewport({ scale });
 
@@ -263,6 +335,7 @@ async function renderPage(index) {
 
   try {
     await task.promise;
+    if (token !== openToken) return;
     wrapper.replaceChildren(canvas);
     wrapper.dataset.rendered = 'yes';
   } catch {
@@ -277,7 +350,9 @@ async function renderPage(index) {
 function discardPage(index) {
   const task = renderTasks.get(index);
   if (task) {
-    task.cancel();
+    try {
+      task.cancel();
+    } catch { /* already finished */ }
     renderTasks.delete(index);
   }
 
@@ -287,6 +362,95 @@ function discardPage(index) {
   wrapper.textContent = '';
   delete wrapper.dataset.rendered;
 }
+
+/* ------------------------------ Page field -------------------------------
+   "Which page am I on" is the one filling most of the viewport, not whichever
+   one still touches its top edge. Landing on a page leaves the previous one's
+   bottom edge sitting exactly on the boundary, and sub-pixel rounding is
+   enough for it to still count as visible — which is what made a jump to
+   page 12 report page 11.
+   -------------------------------------------------------------------------- */
+
+function currentPageNumber() {
+  if (visiblePages.size === 0) return null;
+
+  const view = el.pdfScroll.getBoundingClientRect();
+
+  let best = null;
+  let bestVisible = -Infinity;
+
+  // Sorted so an exact tie settles on the earlier page rather than at random.
+  for (const index of [...visiblePages].sort((a, b) => a - b)) {
+    const wrapper = pageEls[index];
+    if (!wrapper) continue;
+
+    const rect = wrapper.getBoundingClientRect();
+    const visible = Math.min(rect.bottom, view.bottom) - Math.max(rect.top, view.top);
+
+    if (visible > bestVisible) {
+      bestVisible = visible;
+      best = index;
+    }
+  }
+
+  return best === null ? null : best + 1;
+}
+
+function paintPageNumber() {
+  // Don't fight someone mid-type.
+  if (document.activeElement === el.pageInput) return;
+
+  const page = currentPageNumber();
+  if (page === null) return;
+
+  el.pageInput.value = String(page);
+}
+
+function goToPage(number) {
+  if (!doc) return false;
+
+  const target = Math.min(doc.numPages, Math.max(1, number));
+  const wrapper = pageEls[target - 1];
+  if (!wrapper) return false;
+
+  // Measured rather than accumulated, so it stays right even though pages
+  // resize themselves as they render.
+  const containerTop = el.pdfScroll.getBoundingClientRect().top;
+  const targetTop = wrapper.getBoundingClientRect().top;
+  el.pdfScroll.scrollTop += targetTop - containerTop - PAGE_GUTTER;
+
+  el.pageInput.value = String(target);
+  return true;
+}
+
+el.pageInput.addEventListener('focus', () => el.pageInput.select());
+
+el.pageInput.addEventListener('input', () => {
+  const digits = el.pageInput.value.replace(/\D/g, '').slice(0, 5);
+  if (digits !== el.pageInput.value) el.pageInput.value = digits;
+});
+
+el.pageInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const wanted = Number(el.pageInput.value);
+    if (Number.isFinite(wanted) && wanted > 0) goToPage(wanted);
+    el.pageInput.blur();
+    el.pdfScroll.focus(); // hand the arrow keys back to the document
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    el.pageInput.blur();
+  }
+});
+
+// Leaving without committing puts the real page number back.
+el.pageInput.addEventListener('blur', () => {
+  const page = currentPageNumber();
+  el.pageInput.value = String(page ?? (Number(el.pageInput.value) || 1));
+});
 
 /* -------------------------------- Zoom ----------------------------------- */
 
@@ -300,13 +464,12 @@ function setZoom(nextIndex) {
   const clamped = Math.min(ZOOM_STEPS.length - 1, Math.max(0, nextIndex));
   if (!doc || clamped === zoomIndex) return;
 
-  // Keep the reader roughly where they were rather than jumping to the top.
-  const anchor = el.pdfScroll.scrollTop / Math.max(1, el.pdfScroll.scrollHeight);
+  // Rebuild at the new scale, then put the reader back on the page they were on.
+  const anchor = currentPageNumber() ?? 1;
 
   zoomIndex = clamped;
   buildPages();
-
-  el.pdfScroll.scrollTop = anchor * el.pdfScroll.scrollHeight;
+  goToPage(anchor);
 }
 
 el.zoomIn.addEventListener('click', () => setZoom(zoomIndex + 1));
@@ -314,8 +477,11 @@ el.zoomOut.addEventListener('click', () => setZoom(zoomIndex - 1));
 
 window.addEventListener('resize', () => {
   if (!doc) return;
+
+  const anchor = currentPageNumber() ?? 1;
   measureFit();
   buildPages();
+  goToPage(anchor);
 });
 
 /* --------------------------- Hold to exit --------------------------------
@@ -410,7 +576,9 @@ document.addEventListener('keydown', (event) => {
     closeDialog();
     return;
   }
-  if (!el.dialog.hidden) return;
+
+  if (!el.dialog.hidden) return;             // dialog is open; leave it alone
+  if (event.target === el.pageInput) return; // typing a page number
 
   if (event.metaKey && (event.key === '=' || event.key === '+')) {
     event.preventDefault();

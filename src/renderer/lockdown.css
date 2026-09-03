@@ -97,7 +97,7 @@ html, body { overflow: hidden; }
   flex: none;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--ink);
@@ -118,6 +118,7 @@ html, body { overflow: hidden; }
 }
 
 .bar-button:hover { background: var(--surface-up); }
+.bar-button:disabled { color: var(--line); cursor: default; background: none; }
 
 .bar-title {
   flex: 1 1 auto;
@@ -129,6 +130,41 @@ html, body { overflow: hidden; }
   color: var(--muted);
   font-size: 13px;
 }
+
+/* ------------------------------ Page field ------------------------------- */
+
+.pager {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.pager-input {
+  width: 52px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+}
+
+.pager-input:focus { border-color: var(--accent); }
+.pager-input::selection { background: var(--accent-dim); }
+
+.pager-total {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --------------------------------- Zoom ---------------------------------- */
 
 .zoom {
   flex: none;
@@ -151,9 +187,6 @@ html, body { overflow: hidden; }
   flex: 1 1 auto;
   overflow: auto;
   outline: none;
-  /* Momentum scrolling makes a long textbook feel like paper rather than a
-     list of images. */
-  -webkit-overflow-scrolling: touch;
 }
 
 .pdf-pages {

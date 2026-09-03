@@ -36,6 +36,21 @@
 
       <p id="viewerTitle" class="bar-title"></p>
 
+      <div id="pageControls" class="pager" hidden>
+        <input
+          id="pageInput"
+          class="pager-input"
+          type="text"
+          inputmode="numeric"
+          size="4"
+          maxlength="5"
+          value="1"
+          aria-label="Page number"
+          autocomplete="off"
+          spellcheck="false">
+        <span id="pageTotal" class="pager-total"></span>
+      </div>
+
       <div id="zoomControls" class="zoom" hidden>
         <button id="zoomOut" class="bar-button" type="button" aria-label="Zoom out">&#8722;</button>
         <span id="zoomLevel" class="zoom-level">100%</span>
