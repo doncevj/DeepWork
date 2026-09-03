@@ -22,8 +22,8 @@
   <!-- ============================= Home ============================= -->
   <main id="home" class="home">
 
-    <!-- Lives inside #home on purpose: it disappears with the home screen,
-         so a running timer is never visible while reading or watching. -->
+    <!-- Both corners live inside #home on purpose: they disappear with the
+         home screen, so neither is visible while reading or watching. -->
     <div class="timer">
       <div id="timerSetter" class="timer-setter">
         <p class="timer-title">Lockdown Timer (optional)</p>
@@ -60,6 +60,8 @@
 
       <p id="timerCountdown" class="timer-countdown" hidden></p>
     </div>
+
+    <p id="clock" class="clock"></p>
 
     <div class="home-inner">
       <h1 class="home-title">DeepWork</h1>
@@ -125,6 +127,19 @@
           <button id="forward10" class="bar-button" type="button" aria-label="Forward 10 seconds">10s &#8594;</button>
 
           <p id="time" class="time">0:00 / 0:00</p>
+
+          <div class="volume-group">
+            <button id="mute" class="bar-button" type="button">Mute</button>
+            <input
+              id="volume"
+              class="volume"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value="1"
+              aria-label="Volume">
+          </div>
 
           <div class="speed">
             <select id="speed" class="speed-select" aria-label="Playback speed">

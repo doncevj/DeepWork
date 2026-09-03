@@ -85,10 +85,10 @@ html, body { overflow: hidden; }
   color: var(--line);
 }
 
-/* --------------------------------- Timer ---------------------------------
-   Tucked into the corner and, once running, deliberately faint. A countdown
-   you keep glancing at is a countdown you're working against rather than
-   working through.
+/* -------------------------- Corners: timer, clock ------------------------
+   Tucked away and, once running, deliberately faint. A countdown you keep
+   glancing at is one you're working against rather than through; the clock
+   matches it so the two corners balance.
    -------------------------------------------------------------------------- */
 
 .timer {
@@ -148,8 +148,8 @@ html, body { overflow: hidden; }
 .timer-button:hover:not(:disabled) { background: var(--surface-up); }
 .timer-button:disabled { color: var(--line); cursor: default; }
 
-/* Faint on purpose. Legible at a glance, invisible the rest of the time. */
-.timer-countdown {
+.timer-countdown,
+.clock {
   margin: 0;
   font-size: 13px;
   color: var(--muted);
@@ -157,9 +157,16 @@ html, body { overflow: hidden; }
   font-variant-numeric: tabular-nums;
 }
 
+.clock {
+  position: absolute;
+  top: 28px;
+  right: 30px;
+}
+
 /* -------------------------------- Viewer --------------------------------- */
 
 .viewer {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -173,6 +180,7 @@ html, body { overflow: hidden; }
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--ink);
+  transition: opacity 200ms ease;
 }
 
 .bar-button {
@@ -281,27 +289,66 @@ html, body { overflow: hidden; }
   display: block;
 }
 
-/* -------------------------------- Video ---------------------------------- */
+/* -------------------------------- Video ----------------------------------
+   In video mode the stage takes the whole viewer and the bar, controls and
+   status float over it. Stacking them instead would leave two strips of
+   background behind once the chrome fades, which isn't a blank screen.
+   -------------------------------------------------------------------------- */
 
 .video-stage {
+  position: relative;
   flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
   min-height: 0;
 }
 
 .video {
-  flex: 1 1 auto;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   width: 100%;
+  height: 100%;
   background: #000;
   object-fit: contain;
 }
 
 .controls {
-  flex: none;
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 2;
   padding: 10px 16px 6px;
-  border-top: 1px solid var(--line);
+  transition: opacity 200ms ease;
+}
+
+.viewer.is-video .video-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.viewer.is-video .bar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 2;
+  border-bottom: 0;
+  background: linear-gradient(rgba(14, 13, 11, 0.9), rgba(14, 13, 11, 0));
+}
+
+.viewer.is-video .controls {
+  background: linear-gradient(rgba(14, 13, 11, 0), rgba(14, 13, 11, 0.92));
+}
+
+.viewer.is-video .viewer-status {
+  position: absolute;
+  inset: auto 0 96px 0;
+  z-index: 2;
+  text-align: center;
+}
+
+/* Idle: the chrome goes, and the pointer with it. */
+.viewer.is-immersive { cursor: none; }
+
+.viewer.is-immersive .bar,
+.viewer.is-immersive .controls {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* Seek bar. The filled portion is driven by --progress, set on every frame of
@@ -344,16 +391,54 @@ html, body { overflow: hidden; }
 }
 
 .time {
-  margin: 0 0 0 6px;
+  margin: 0 auto 0 6px; /* pushes volume and speed to the right */
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+/* -------------------------------- Volume --------------------------------- */
+
+.volume-group {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.volume {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 74px;
+  height: 18px;
+  margin: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.volume::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background:
+    linear-gradient(var(--accent), var(--accent)) left / var(--level, 100%) 100% no-repeat,
+    var(--surface-up);
+}
+
+.volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  margin-top: -3.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* --------------------------------- Speed --------------------------------- */
+
 .speed {
   position: relative;
-  margin-left: auto;
 }
 
 /* The native control loses its indicator with appearance: none, so the caret

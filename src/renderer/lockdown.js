@@ -32,12 +32,21 @@ const PAGE_GUTTER = 14;
 
 const SKIP_SECONDS = 10;
 const LONG_SKIP_SECONDS = 60; // shift + arrow, for getting across a long lecture
+const VOLUME_STEP = 0.05;
+
+// How long the pointer sits still before the video chrome gets out of the way.
+const IDLE_MS = 2600;
+
+// Resuming right at the end would drop you back on the credits, so anything
+// this close to the finish counts as done.
+const RESUME_END_MARGIN = 2;
 
 const $ = (id) => document.getElementById(id);
 
 const el = {
   home:      $('home'),
   homeList:  $('homeList'),
+  clock:     $('clock'),
 
   timerSetter:    $('timerSetter'),
   timerHours:     $('timerHours'),
@@ -69,6 +78,8 @@ const el = {
   back10:     $('back10'),
   forward10:  $('forward10'),
   time:       $('time'),
+  mute:       $('mute'),
+  volume:     $('volume'),
   speed:      $('speed'),
 
   armDialog:  $('armDialog'),
@@ -87,6 +98,21 @@ const el = {
 
 // 'PDF' | 'Video' | null — decides which keyboard shortcuts are live.
 let activeKind = null;
+let activeFile = null;
+
+// file id -> { page } for PDFs, { time } for videos. Session-scoped: going
+// Home and coming back should put you where you were, not at the beginning.
+const resumePoints = new Map();
+
+/* --------------------------------- Clock ---------------------------------- */
+
+function paintClock() {
+  // Locale decides 12 or 24 hour; the menu bar clock isn't available in here.
+  el.clock.textContent = new Date().toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+}
 
 /* --------------------------------- Timer ---------------------------------
    Optional. Setting one removes every exit, including Cmd+Q, until it runs
@@ -168,19 +194,18 @@ for (const input of [el.timerHours, el.timerMinutes]) {
   input.addEventListener('focus', () => input.select());
 
   input.addEventListener('input', () => {
-    const max = input === el.timerHours
+    const isHours = input === el.timerHours;
+    const max = isHours
       ? TIMER_MAX_HOURS
       : (timerHoursValue() >= TIMER_MAX_HOURS ? 0 : TIMER_MAX_MINUTES);
 
-    const digits = input.value.replace(/\D/g, '').slice(0, input === el.timerHours ? 1 : 2);
+    const digits = input.value.replace(/\D/g, '').slice(0, isHours ? 1 : 2);
     const next = digits === '' ? '' : String(Math.min(max, Number(digits)));
 
     if (next !== input.value) input.value = next;
 
     // Clamping hours to 8 has to drag minutes down with it.
-    if (input === el.timerHours && timerHoursValue() >= TIMER_MAX_HOURS) {
-      el.timerMinutes.value = '0';
-    }
+    if (isHours && timerHoursValue() >= TIMER_MAX_HOURS) el.timerMinutes.value = '0';
 
     el.timerSet.disabled = timerTotalMinutes() === 0;
   });
@@ -270,7 +295,27 @@ async function buildHome() {
   }
 }
 
+// Called before anything is torn down, because both readings depend on state
+// that closing destroys.
+function rememberPosition() {
+  if (!activeFile) return;
+
+  if (activeFile.kind === 'PDF') {
+    const page = currentPageNumber();
+    if (page !== null) resumePoints.set(activeFile.id, { page });
+    return;
+  }
+
+  const time = el.video.currentTime;
+  const duration = el.video.duration;
+  const finished = Number.isFinite(duration) && duration - time < RESUME_END_MARGIN;
+
+  resumePoints.set(activeFile.id, { time: finished ? 0 : time });
+}
+
 function closeActive() {
+  rememberPosition();
+
   closeVideo();
 
   try {
@@ -280,11 +325,19 @@ function closeActive() {
   }
 
   activeKind = null;
+  activeFile = null;
+
+  stopIdleTimer();
+  el.viewer.classList.remove('is-immersive', 'is-video');
 }
 
 // Swap the screens first. If tearing something down goes wrong, the reader
 // still gets their list back rather than being stuck staring at a dead page.
 function showHome() {
+  // Before hiding, not after: a hidden element has no geometry, and the page
+  // position is worked out by measuring.
+  rememberPosition();
+
   el.viewer.hidden = true;
   el.home.hidden = false;
   closeActive();
@@ -302,6 +355,9 @@ function showViewer(file) {
   el.zoomControls.hidden = !isPdf;
   el.pageControls.hidden = !isPdf;
   el.videoStage.hidden = isPdf;
+
+  el.viewer.classList.toggle('is-video', !isPdf);
+  el.viewer.classList.remove('is-immersive');
 }
 
 function setStatus(text, isWarning = false) {
@@ -312,7 +368,9 @@ function setStatus(text, isWarning = false) {
 async function openFile(file) {
   closeActive();
   showViewer(file);
+
   activeKind = file.kind;
+  activeFile = file;
 
   if (file.kind === 'PDF') await openPdf(file);
   else openVideo(file);
@@ -418,7 +476,11 @@ async function openPdf(file) {
   buildPages();
 
   el.pageTotal.textContent = `/ ${doc.numPages}`;
-  el.pageInput.value = '1';
+
+  const resume = resumePoints.get(file.id);
+  if (resume?.page) goToPage(resume.page);
+  else el.pageInput.value = '1';
+
   setStatus(`${doc.numPages} ${doc.numPages === 1 ? 'page' : 'pages'}`);
 }
 
@@ -563,6 +625,11 @@ function currentPageNumber() {
 
   const view = el.pdfScroll.getBoundingClientRect();
 
+  // A hidden viewer measures zero everywhere, which would make every page tie
+  // and hand the answer to whichever index came first. Better to admit we
+  // can't tell than to report the page above the one being read.
+  if (view.height === 0) return null;
+
   let best = null;
   let bestVisible = -Infinity;
 
@@ -677,6 +744,7 @@ window.addEventListener('resize', () => {
    -------------------------------------------------------------------------- */
 
 let scrubbing = false;
+let pendingSeek = null; // a resume point, applied once the duration is known
 
 function formatTime(seconds) {
   const total = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
@@ -705,20 +773,36 @@ function setPlayLabel() {
   el.playPause.textContent = el.video.paused ? 'Play' : 'Pause';
 }
 
+function paintVolume() {
+  const level = el.video.muted ? 0 : el.video.volume;
+
+  el.volume.value = String(el.video.volume);
+  el.volume.style.setProperty('--level', `${level * 100}%`);
+  el.mute.textContent = level === 0 ? 'Unmute' : 'Mute';
+}
+
 function openVideo(file) {
+  // The element persists between files, so volume and speed carry over on
+  // their own. Only the resume point needs setting up.
+  const resume = resumePoints.get(file.id);
+  pendingSeek = resume?.time ?? null;
+
   el.video.src = `lockdown://file/${encodeURIComponent(file.id)}`;
-  el.video.playbackRate = Number(el.speed.value); // carried over between files
+  el.video.playbackRate = Number(el.speed.value);
   el.video.load();
 
   el.seek.value = '0';
   el.seek.max = '0';
   paintProgress();
+  paintVolume();
   setPlayLabel();
   setStatus('');
+  wakeChrome();
 }
 
 function closeVideo() {
   scrubbing = false;
+  pendingSeek = null;
 
   try {
     el.video.pause();
@@ -747,16 +831,48 @@ function nudge(delta) {
   el.video.currentTime = Math.min(duration, Math.max(0, el.video.currentTime + delta));
 }
 
+function changeVolume(delta) {
+  el.video.volume = Math.min(1, Math.max(0, el.video.volume + delta));
+  el.video.muted = el.video.volume === 0;
+  paintVolume();
+}
+
 el.playPause.addEventListener('click', togglePlay);
 el.back10.addEventListener('click', () => nudge(-SKIP_SECONDS));
 el.forward10.addEventListener('click', () => nudge(SKIP_SECONDS));
+
+// Clicking the picture is how everyone expects to pause a video.
+el.video.addEventListener('click', togglePlay);
+
+el.mute.addEventListener('click', () => {
+  if (el.video.muted || el.video.volume === 0) {
+    el.video.muted = false;
+    if (el.video.volume === 0) el.video.volume = 0.5;
+  } else {
+    el.video.muted = true;
+  }
+  paintVolume();
+});
+
+el.volume.addEventListener('input', () => {
+  el.video.volume = Number(el.volume.value);
+  el.video.muted = el.video.volume === 0;
+  paintVolume();
+});
 
 el.speed.addEventListener('change', () => {
   el.video.playbackRate = Number(el.speed.value);
 });
 
 el.video.addEventListener('loadedmetadata', () => {
-  el.seek.max = String(Number.isFinite(el.video.duration) ? el.video.duration : 0);
+  const duration = Number.isFinite(el.video.duration) ? el.video.duration : 0;
+  el.seek.max = String(duration);
+
+  if (pendingSeek !== null) {
+    el.video.currentTime = Math.min(pendingSeek, Math.max(0, duration));
+    pendingSeek = null;
+  }
+
   paintProgress();
 });
 
@@ -770,9 +886,9 @@ el.video.addEventListener('timeupdate', () => {
   paintProgress();
 });
 
-el.video.addEventListener('play', setPlayLabel);
-el.video.addEventListener('pause', setPlayLabel);
-el.video.addEventListener('ended', setPlayLabel);
+el.video.addEventListener('play', () => { setPlayLabel(); wakeChrome(); });
+el.video.addEventListener('pause', () => { setPlayLabel(); wakeChrome(); });
+el.video.addEventListener('ended', () => { setPlayLabel(); wakeChrome(); });
 
 el.video.addEventListener('error', () => {
   // Clearing the source to release the file fires this too; ignore that one.
@@ -799,6 +915,34 @@ el.seek.addEventListener('input', () => {
   el.video.currentTime = target;
   paintProgress();
 });
+
+/* ---------------------------- Idle chrome --------------------------------
+   Only while a video is actually playing. Hiding the controls under a paused
+   frame would just look broken.
+   -------------------------------------------------------------------------- */
+
+let idleTimer = null;
+
+function stopIdleTimer() {
+  if (idleTimer !== null) clearTimeout(idleTimer);
+  idleTimer = null;
+}
+
+function wakeChrome() {
+  el.viewer.classList.remove('is-immersive');
+  stopIdleTimer();
+
+  if (activeKind !== 'Video' || el.video.paused) return;
+
+  idleTimer = setTimeout(() => {
+    if (activeKind === 'Video' && !el.video.paused && !anyDialogOpen()) {
+      el.viewer.classList.add('is-immersive');
+    }
+  }, IDLE_MS);
+}
+
+document.addEventListener('mousemove', wakeChrome);
+document.addEventListener('pointerdown', wakeChrome);
 
 /* --------------------------- Hold to exit --------------------------------
    Timed against the clock rather than by counting frames, so a busy moment
@@ -880,6 +1024,8 @@ function anyDialogOpen() {
 
 // Cmd+Q. Main tells us whether the timer is currently refusing.
 function onExitRequested(payload) {
+  wakeChrome();
+
   if (payload?.locked) {
     if (el.lockedDialog.hidden) {
       el.lockedDialog.hidden = false;
@@ -923,8 +1069,11 @@ document.addEventListener('keydown', (event) => {
   if (event.target === el.timerHours) return;     // typing a lockdown length
   if (event.target === el.timerMinutes) return;
   if (event.target === el.speed) return;          // arrow keys belong to the menu
+  if (event.target === el.volume) return;         // and to the slider
 
   if (activeKind === 'Video') {
+    wakeChrome();
+
     if (event.key === ' ') {
       // Also stops a focused button being clicked by the same keystroke.
       event.preventDefault();
@@ -936,6 +1085,12 @@ document.addEventListener('keydown', (event) => {
       event.preventDefault();
       const step = event.shiftKey ? LONG_SKIP_SECONDS : SKIP_SECONDS;
       nudge(event.key === 'ArrowLeft' ? -step : step);
+      return;
+    }
+
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      changeVolume(event.key === 'ArrowUp' ? VOLUME_STEP : -VOLUME_STEP);
       return;
     }
   }
@@ -956,7 +1111,11 @@ document.addEventListener('keydown', (event) => {
 
 /* --------------------------------- Boot ----------------------------------- */
 
+paintClock();
+setInterval(paintClock, 1000);
+
 paintCounter(HOLD_SECONDS);
+paintVolume();
 normaliseTimerFields();
 loadTimer();
 buildHome();
