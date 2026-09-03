@@ -24,6 +24,9 @@ const RENDER_MARGIN = '150% 0px';
 // inside the viewport rather than flush against the bar.
 const PAGE_GUTTER = 14;
 
+const SKIP_SECONDS = 10;
+const LONG_SKIP_SECONDS = 60; // shift + arrow, for getting across a long lecture
+
 const $ = (id) => document.getElementById(id);
 
 const el = {
@@ -47,11 +50,23 @@ const el = {
   pdfScroll: $('pdfScroll'),
   pdfPages:  $('pdfPages'),
 
+  videoStage: $('videoStage'),
+  video:      $('video'),
+  seek:       $('seek'),
+  playPause:  $('playPause'),
+  back10:     $('back10'),
+  forward10:  $('forward10'),
+  time:       $('time'),
+  speed:      $('speed'),
+
   dialog:  $('exitDialog'),
   goBack:  $('goBack'),
   doExit:  $('doExit'),
   counter: $('holdCounter')
 };
+
+// 'PDF' | 'Video' | null — decides which keyboard shortcuts are live.
+let activeKind = null;
 
 /* --------------------------------- Home ---------------------------------- */
 
@@ -90,27 +105,37 @@ async function buildHome() {
   }
 }
 
-// Swap the screens first. If tearing the document down goes wrong, the reader
-// still gets their list back rather than being stuck staring at a dead page.
-function showHome() {
-  el.viewer.hidden = true;
-  el.home.hidden = false;
+function closeActive() {
+  closeVideo();
 
   try {
     closeDocument();
   } catch (error) {
     console.error('[DeepWork] closing the document failed', error);
   }
+
+  activeKind = null;
+}
+
+// Swap the screens first. If tearing something down goes wrong, the reader
+// still gets their list back rather than being stuck staring at a dead page.
+function showHome() {
+  el.viewer.hidden = true;
+  el.home.hidden = false;
+  closeActive();
 }
 
 function showViewer(file) {
+  const isPdf = file.kind === 'PDF';
+
   el.home.hidden = true;
   el.viewer.hidden = false;
   el.viewerTitle.textContent = file.name;
 
-  const isPdf = file.kind === 'PDF';
+  el.pdfScroll.hidden = !isPdf;
   el.zoomControls.hidden = !isPdf;
   el.pageControls.hidden = !isPdf;
+  el.videoStage.hidden = isPdf;
 }
 
 function setStatus(text, isWarning = false) {
@@ -119,15 +144,12 @@ function setStatus(text, isWarning = false) {
 }
 
 async function openFile(file) {
+  closeActive();
   showViewer(file);
+  activeKind = file.kind;
 
-  if (file.kind === 'PDF') {
-    await openPdf(file);
-    return;
-  }
-
-  // Video lands here next.
-  setStatus('Video playback is not built yet.');
+  if (file.kind === 'PDF') await openPdf(file);
+  else openVideo(file);
 }
 
 el.homeButton.addEventListener('click', showHome);
@@ -367,8 +389,7 @@ function discardPage(index) {
    "Which page am I on" is the one filling most of the viewport, not whichever
    one still touches its top edge. Landing on a page leaves the previous one's
    bottom edge sitting exactly on the boundary, and sub-pixel rounding is
-   enough for it to still count as visible — which is what made a jump to
-   page 12 report page 11.
+   enough for it to still count as visible.
    -------------------------------------------------------------------------- */
 
 function currentPageNumber() {
@@ -484,6 +505,135 @@ window.addEventListener('resize', () => {
   goToPage(anchor);
 });
 
+/* -------------------------------- Video ----------------------------------
+   The file is streamed from lockdown://, which answers Range requests, so
+   seeking in a two hour recording doesn't mean downloading it first.
+   -------------------------------------------------------------------------- */
+
+let scrubbing = false;
+
+function formatTime(seconds) {
+  const total = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+
+  return hours > 0
+    ? `${hours}:${pad(minutes)}:${pad(secs)}`
+    : `${minutes}:${pad(secs)}`;
+}
+
+function paintProgress() {
+  const duration = el.video.duration;
+  const fraction = Number.isFinite(duration) && duration > 0
+    ? el.video.currentTime / duration
+    : 0;
+
+  el.seek.style.setProperty('--progress', `${fraction * 100}%`);
+  el.time.textContent = `${formatTime(el.video.currentTime)} / ${formatTime(duration)}`;
+}
+
+function setPlayLabel() {
+  el.playPause.textContent = el.video.paused ? 'Play' : 'Pause';
+}
+
+function openVideo(file) {
+  el.video.src = `lockdown://file/${encodeURIComponent(file.id)}`;
+  el.video.playbackRate = Number(el.speed.value); // carried over between files
+  el.video.load();
+
+  el.seek.value = '0';
+  el.seek.max = '0';
+  paintProgress();
+  setPlayLabel();
+  setStatus('');
+}
+
+function closeVideo() {
+  scrubbing = false;
+
+  try {
+    el.video.pause();
+    // Dropping the attribute and reloading is what actually releases the
+    // stream; leaving the src set keeps the file open behind the scenes.
+    el.video.removeAttribute('src');
+    el.video.load();
+  } catch { /* nothing worth reporting */ }
+
+  el.seek.value = '0';
+  el.seek.max = '0';
+  el.seek.style.setProperty('--progress', '0%');
+  el.time.textContent = '0:00 / 0:00';
+  setPlayLabel();
+}
+
+function togglePlay() {
+  if (el.video.paused) el.video.play().catch(() => {});
+  else el.video.pause();
+}
+
+function nudge(delta) {
+  const duration = el.video.duration;
+  if (!Number.isFinite(duration)) return;
+
+  el.video.currentTime = Math.min(duration, Math.max(0, el.video.currentTime + delta));
+}
+
+el.playPause.addEventListener('click', togglePlay);
+el.back10.addEventListener('click', () => nudge(-SKIP_SECONDS));
+el.forward10.addEventListener('click', () => nudge(SKIP_SECONDS));
+
+el.speed.addEventListener('change', () => {
+  el.video.playbackRate = Number(el.speed.value);
+});
+
+el.video.addEventListener('loadedmetadata', () => {
+  el.seek.max = String(Number.isFinite(el.video.duration) ? el.video.duration : 0);
+  paintProgress();
+});
+
+el.video.addEventListener('durationchange', () => {
+  el.seek.max = String(Number.isFinite(el.video.duration) ? el.video.duration : 0);
+});
+
+el.video.addEventListener('timeupdate', () => {
+  if (scrubbing) return; // don't yank the handle out from under a drag
+  el.seek.value = String(el.video.currentTime);
+  paintProgress();
+});
+
+el.video.addEventListener('play', setPlayLabel);
+el.video.addEventListener('pause', setPlayLabel);
+el.video.addEventListener('ended', setPlayLabel);
+
+el.video.addEventListener('error', () => {
+  // Clearing the source to release the file fires this too; ignore that one.
+  if (!el.video.getAttribute('src')) return;
+
+  const reasons = {
+    1: 'Loading was interrupted.',
+    2: 'The file could not be read.',
+    3: 'This video could not be decoded.',
+    4: 'This video format is not supported.'
+  };
+
+  setStatus(reasons[el.video.error?.code] ?? 'This video could not be played.', true);
+});
+
+el.seek.addEventListener('pointerdown', () => { scrubbing = true; });
+el.seek.addEventListener('pointerup', () => { scrubbing = false; });
+el.seek.addEventListener('pointercancel', () => { scrubbing = false; });
+
+el.seek.addEventListener('input', () => {
+  const target = Number(el.seek.value);
+  if (!Number.isFinite(target)) return;
+
+  el.video.currentTime = target;
+  paintProgress();
+});
+
 /* --------------------------- Hold to exit --------------------------------
    Timed against the clock rather than by counting frames, so a busy moment
    can't quietly shorten the hold. Any release, any loss of focus, and it
@@ -577,18 +727,37 @@ document.addEventListener('keydown', (event) => {
     return;
   }
 
-  if (!el.dialog.hidden) return;             // dialog is open; leave it alone
-  if (event.target === el.pageInput) return; // typing a page number
+  if (!el.dialog.hidden) return;              // dialog is open; leave it alone
+  if (event.target === el.pageInput) return;  // typing a page number
+  if (event.target === el.speed) return;      // arrow keys belong to the menu
 
-  if (event.metaKey && (event.key === '=' || event.key === '+')) {
-    event.preventDefault();
-    setZoom(zoomIndex + 1);
-  } else if (event.metaKey && event.key === '-') {
-    event.preventDefault();
-    setZoom(zoomIndex - 1);
-  } else if (event.metaKey && event.key === '0') {
-    event.preventDefault();
-    setZoom(DEFAULT_ZOOM_INDEX);
+  if (activeKind === 'Video') {
+    if (event.key === ' ') {
+      // Also stops a focused button being clicked by the same keystroke.
+      event.preventDefault();
+      togglePlay();
+      return;
+    }
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const step = event.shiftKey ? LONG_SKIP_SECONDS : SKIP_SECONDS;
+      nudge(event.key === 'ArrowLeft' ? -step : step);
+      return;
+    }
+  }
+
+  if (activeKind === 'PDF') {
+    if (event.metaKey && (event.key === '=' || event.key === '+')) {
+      event.preventDefault();
+      setZoom(zoomIndex + 1);
+    } else if (event.metaKey && event.key === '-') {
+      event.preventDefault();
+      setZoom(zoomIndex - 1);
+    } else if (event.metaKey && event.key === '0') {
+      event.preventDefault();
+      setZoom(DEFAULT_ZOOM_INDEX);
+    }
   }
 });
 
