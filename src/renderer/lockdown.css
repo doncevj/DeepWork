@@ -85,6 +85,78 @@ html, body { overflow: hidden; }
   color: var(--line);
 }
 
+/* --------------------------------- Timer ---------------------------------
+   Tucked into the corner and, once running, deliberately faint. A countdown
+   you keep glancing at is a countdown you're working against rather than
+   working through.
+   -------------------------------------------------------------------------- */
+
+.timer {
+  position: absolute;
+  top: 28px;
+  left: 30px;
+}
+
+.timer-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.timer-fields {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timer-input {
+  width: 38px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+}
+
+.timer-input:focus { border-color: var(--accent); }
+.timer-input::selection { background: var(--accent-dim); }
+
+.timer-unit {
+  margin-right: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.timer-button {
+  margin-left: 4px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 110ms ease;
+}
+
+.timer-button:hover:not(:disabled) { background: var(--surface-up); }
+.timer-button:disabled { color: var(--line); cursor: default; }
+
+/* Faint on purpose. Legible at a glance, invisible the rest of the time. */
+.timer-countdown {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  opacity: 0.4;
+  font-variant-numeric: tabular-nums;
+}
+
 /* -------------------------------- Viewer --------------------------------- */
 
 .viewer {
@@ -329,7 +401,7 @@ html, body { overflow: hidden; }
 
 .viewer-status.is-warning { color: var(--danger); }
 
-/* -------------------------------- Exit ----------------------------------- */
+/* -------------------------------- Dialogs -------------------------------- */
 
 .overlay .sheet {
   max-width: 400px;

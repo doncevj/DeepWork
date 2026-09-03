@@ -21,11 +21,52 @@
 
   <!-- ============================= Home ============================= -->
   <main id="home" class="home">
+
+    <!-- Lives inside #home on purpose: it disappears with the home screen,
+         so a running timer is never visible while reading or watching. -->
+    <div class="timer">
+      <div id="timerSetter" class="timer-setter">
+        <p class="timer-title">Lockdown Timer (optional)</p>
+        <div class="timer-fields">
+          <input
+            id="timerHours"
+            class="timer-input"
+            type="text"
+            inputmode="numeric"
+            size="2"
+            maxlength="1"
+            value="0"
+            aria-label="Lockdown hours"
+            autocomplete="off"
+            spellcheck="false">
+          <span class="timer-unit">h</span>
+
+          <input
+            id="timerMinutes"
+            class="timer-input"
+            type="text"
+            inputmode="numeric"
+            size="2"
+            maxlength="2"
+            value="0"
+            aria-label="Lockdown minutes"
+            autocomplete="off"
+            spellcheck="false">
+          <span class="timer-unit">m</span>
+
+          <button id="timerSet" class="timer-button" type="button" disabled>Set</button>
+        </div>
+      </div>
+
+      <p id="timerCountdown" class="timer-countdown" hidden></p>
+    </div>
+
     <div class="home-inner">
       <h1 class="home-title">DeepWork</h1>
       <p class="home-sub">Choose something to open.</p>
       <ul id="homeList" class="home-list"></ul>
     </div>
+
     <p class="stage-hint">Press &#8984;Q to exit</p>
   </main>
 
@@ -102,6 +143,31 @@
 
     <p id="viewerStatus" class="viewer-status" role="status" aria-live="polite"></p>
   </section>
+
+  <!-- ======================= Arm the timer ========================= -->
+  <div id="armDialog" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="armTitle">
+    <div class="sheet">
+      <h2 id="armTitle" class="sheet-title">Are you sure?</h2>
+      <p id="armBody" class="sheet-body">There will be no exiting.</p>
+
+      <div class="sheet-actions">
+        <button id="armCancel" class="ghost" type="button">Cancel</button>
+        <button id="armConfirm" class="start start-inline" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== Cmd+Q while the timer runs ================= -->
+  <div id="lockedDialog" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="lockedTitle">
+    <div class="sheet">
+      <h2 id="lockedTitle" class="sheet-title">No exit</h2>
+      <p class="sheet-body">The lockdown timer is still running.</p>
+
+      <div class="sheet-actions">
+        <button id="lockedBack" class="ghost" type="button">Go Back</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ============================ Exit ============================= -->
   <div id="exitDialog" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="exitTitle">

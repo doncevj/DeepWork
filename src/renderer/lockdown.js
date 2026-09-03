@@ -3,6 +3,9 @@
 
    Two screens: a list of what's in the session, and the reader. File contents
    arrive over lockdown://file/<id>, so nothing here ever sees a path.
+
+   The lockdown timer is displayed here but enforced in the main process. This
+   file can't let anyone out early even if it wanted to.
    ------------------------------------------------------------------------ */
 
 import * as pdfjs from './vendor/pdf.mjs';
@@ -12,6 +15,9 @@ pdfjs.GlobalWorkerOptions.workerSrc =
   new URL('./vendor/pdf.worker.mjs', import.meta.url).href;
 
 const HOLD_SECONDS = 30;
+
+const TIMER_MAX_HOURS = 8;
+const TIMER_MAX_MINUTES = 59;
 
 // 1.0 means "fits the window width", which is what you want for a textbook.
 const ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 2.5, 3];
@@ -32,6 +38,12 @@ const $ = (id) => document.getElementById(id);
 const el = {
   home:      $('home'),
   homeList:  $('homeList'),
+
+  timerSetter:    $('timerSetter'),
+  timerHours:     $('timerHours'),
+  timerMinutes:   $('timerMinutes'),
+  timerSet:       $('timerSet'),
+  timerCountdown: $('timerCountdown'),
 
   viewer:      $('viewer'),
   homeButton:  $('homeButton'),
@@ -59,6 +71,14 @@ const el = {
   time:       $('time'),
   speed:      $('speed'),
 
+  armDialog:  $('armDialog'),
+  armBody:    $('armBody'),
+  armCancel:  $('armCancel'),
+  armConfirm: $('armConfirm'),
+
+  lockedDialog: $('lockedDialog'),
+  lockedBack:   $('lockedBack'),
+
   dialog:  $('exitDialog'),
   goBack:  $('goBack'),
   doExit:  $('doExit'),
@@ -67,6 +87,151 @@ const el = {
 
 // 'PDF' | 'Video' | null — decides which keyboard shortcuts are live.
 let activeKind = null;
+
+/* --------------------------------- Timer ---------------------------------
+   Optional. Setting one removes every exit, including Cmd+Q, until it runs
+   out. The main process is what actually refuses; this just draws it.
+   -------------------------------------------------------------------------- */
+
+let lockUntil = null;
+let timerTicker = null;
+
+function timerRemainingMs() {
+  return lockUntil === null ? 0 : Math.max(0, lockUntil - Date.now());
+}
+
+function timerRunning() {
+  return timerRemainingMs() > 0;
+}
+
+// Hours and minutes only, and rounded up so it never reads 0m while still
+// holding you. Seconds would just be something else to watch.
+function formatRemaining(ms) {
+  const totalMinutes = Math.ceil(ms / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
+function paintTimer() {
+  const running = timerRunning();
+
+  el.timerSetter.hidden = running;
+  el.timerCountdown.hidden = !running;
+
+  if (running) el.timerCountdown.textContent = formatRemaining(timerRemainingMs());
+}
+
+function startTimerTicker() {
+  stopTimerTicker();
+
+  timerTicker = setInterval(() => {
+    paintTimer();
+    if (!timerRunning()) stopTimerTicker();
+  }, 1000);
+}
+
+function stopTimerTicker() {
+  if (timerTicker !== null) clearInterval(timerTicker);
+  timerTicker = null;
+}
+
+/* The two fields. Digits only, clamped as typed. Eight hours is the ceiling,
+   so at 8 the minutes field is pinned to zero. */
+
+function readField(input, max) {
+  const digits = input.value.replace(/\D/g, '');
+  return digits === '' ? 0 : Math.min(max, Number(digits));
+}
+
+function timerHoursValue() {
+  return readField(el.timerHours, TIMER_MAX_HOURS);
+}
+
+function timerMinutesValue() {
+  const ceiling = timerHoursValue() >= TIMER_MAX_HOURS ? 0 : TIMER_MAX_MINUTES;
+  return readField(el.timerMinutes, ceiling);
+}
+
+function timerTotalMinutes() {
+  return timerHoursValue() * 60 + timerMinutesValue();
+}
+
+function normaliseTimerFields() {
+  el.timerHours.value = String(timerHoursValue());
+  el.timerMinutes.value = String(timerMinutesValue());
+  el.timerSet.disabled = timerTotalMinutes() === 0;
+}
+
+for (const input of [el.timerHours, el.timerMinutes]) {
+  input.addEventListener('focus', () => input.select());
+
+  input.addEventListener('input', () => {
+    const max = input === el.timerHours
+      ? TIMER_MAX_HOURS
+      : (timerHoursValue() >= TIMER_MAX_HOURS ? 0 : TIMER_MAX_MINUTES);
+
+    const digits = input.value.replace(/\D/g, '').slice(0, input === el.timerHours ? 1 : 2);
+    const next = digits === '' ? '' : String(Math.min(max, Number(digits)));
+
+    if (next !== input.value) input.value = next;
+
+    // Clamping hours to 8 has to drag minutes down with it.
+    if (input === el.timerHours && timerHoursValue() >= TIMER_MAX_HOURS) {
+      el.timerMinutes.value = '0';
+    }
+
+    el.timerSet.disabled = timerTotalMinutes() === 0;
+  });
+
+  input.addEventListener('blur', normaliseTimerFields);
+
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      input.blur();
+      if (!el.timerSet.disabled) openArmDialog();
+    }
+  });
+}
+
+function openArmDialog() {
+  if (timerRunning() || timerTotalMinutes() === 0) return;
+
+  el.armDialog.hidden = false;
+  el.armCancel.focus(); // this one can't be undone, so the safe button leads
+}
+
+function closeArmDialog() {
+  el.armDialog.hidden = true;
+}
+
+el.timerSet.addEventListener('click', openArmDialog);
+el.armCancel.addEventListener('click', closeArmDialog);
+
+el.armConfirm.addEventListener('click', async () => {
+  const minutes = timerTotalMinutes();
+  closeArmDialog();
+
+  const result = await window.lockdown.armTimer(minutes);
+  if (!result?.ok) {
+    console.error('[DeepWork] arming failed:', result?.error);
+    return;
+  }
+
+  lockUntil = result.lockUntil;
+  paintTimer();
+  startTimerTicker();
+});
+
+async function loadTimer() {
+  const state = await window.lockdown.getTimer();
+  lockUntil = state?.lockUntil ?? null;
+
+  paintTimer();
+  if (timerRunning()) startTimerTicker();
+}
 
 /* --------------------------------- Home ---------------------------------- */
 
@@ -123,6 +288,7 @@ function showHome() {
   el.viewer.hidden = true;
   el.home.hidden = false;
   closeActive();
+  paintTimer();
 }
 
 function showViewer(file) {
@@ -661,7 +827,12 @@ function tick(now) {
 
   exiting = true;
   cancelHold();
-  window.lockdown.exit();
+
+  // Main has the last word. If a timer is still running it says no, and the
+  // hold simply becomes available again.
+  window.lockdown.exit().then((result) => {
+    if (result && result.ok === false) exiting = false;
+  });
 }
 
 function startHold() {
@@ -701,9 +872,22 @@ el.doExit.addEventListener('keyup', (event) => {
 
 window.addEventListener('blur', cancelHold);
 
-/* -------------------------------- Dialog --------------------------------- */
+/* -------------------------------- Dialogs -------------------------------- */
 
-function openDialog() {
+function anyDialogOpen() {
+  return !el.dialog.hidden || !el.armDialog.hidden || !el.lockedDialog.hidden;
+}
+
+// Cmd+Q. Main tells us whether the timer is currently refusing.
+function onExitRequested(payload) {
+  if (payload?.locked) {
+    if (el.lockedDialog.hidden) {
+      el.lockedDialog.hidden = false;
+      el.lockedBack.focus();
+    }
+    return;
+  }
+
   if (!el.dialog.hidden) return; // already asking
 
   cancelHold();
@@ -716,20 +900,29 @@ function closeDialog() {
   el.dialog.hidden = true;
 }
 
-window.lockdown.onExitRequested(openDialog);
+function closeAllDialogs() {
+  closeDialog();
+  closeArmDialog();
+  el.lockedDialog.hidden = true;
+}
+
+window.lockdown.onExitRequested(onExitRequested);
 el.goBack.addEventListener('click', closeDialog);
+el.lockedBack.addEventListener('click', () => { el.lockedDialog.hidden = true; });
 
 /* ------------------------------ Keyboard --------------------------------- */
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !el.dialog.hidden) {
-    closeDialog();
+  if (event.key === 'Escape' && anyDialogOpen()) {
+    closeAllDialogs();
     return;
   }
 
-  if (!el.dialog.hidden) return;              // dialog is open; leave it alone
-  if (event.target === el.pageInput) return;  // typing a page number
-  if (event.target === el.speed) return;      // arrow keys belong to the menu
+  if (anyDialogOpen()) return;                    // a dialog is up; leave it alone
+  if (event.target === el.pageInput) return;      // typing a page number
+  if (event.target === el.timerHours) return;     // typing a lockdown length
+  if (event.target === el.timerMinutes) return;
+  if (event.target === el.speed) return;          // arrow keys belong to the menu
 
   if (activeKind === 'Video') {
     if (event.key === ' ') {
@@ -764,4 +957,6 @@ document.addEventListener('keydown', (event) => {
 /* --------------------------------- Boot ----------------------------------- */
 
 paintCounter(HOLD_SECONDS);
+normaliseTimerFields();
+loadTimer();
 buildHome();

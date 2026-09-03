@@ -14,6 +14,9 @@ fileProtocol.registerScheme();
 // in the main process, so a window can never talk it into opening something else.
 const ALLOWED_EXTENSIONS = new Set(['.pdf', '.mp4']);
 
+// The optional lockdown timer tops out at eight hours.
+const MAX_TIMER_MINUTES = 8 * 60;
+
 // Escape hatch for development. With the lock engaged macOS disables Force
 // Quit, so `npm run dev` runs everything except the lock itself.
 const UNLOCKED = process.env.DEEPWORK_UNLOCKED === '1';
@@ -45,8 +48,13 @@ let watchdog = null;
 // Authoritative session state. Windows render it; they never own it.
 let session = null; // { files, startedAt }
 
-// Flipped only by a completed hold on the exit button. Everything that could
-// close the app checks this first, so there is exactly one way out.
+// Epoch milliseconds, or null. While this is in the future there is no way out
+// of the app at all. It lives here rather than in the window because the window
+// is a display; this is the thing that actually refuses.
+let lockUntil = null;
+
+// Flipped only by a completed hold on the exit button, and only once the timer
+// has finished. Everything that could close the app checks this first.
 let allowQuit = false;
 
 // Dropping out of a session because of a stray exception is worse than limping
@@ -57,6 +65,10 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[DeepWork] unhandled rejection:', reason);
 });
+
+function timerRunning() {
+  return lockUntil !== null && Date.now() < lockUntil;
+}
 
 /* ---------------------------------------------------------------------------
    Windows
@@ -294,6 +306,7 @@ function releaseLockdown() {
   stopWatchdog();
   globalShortcut.unregisterAll();
   fileProtocol.clearAllowlist();
+  lockUntil = null;
 
   if (nativeLockdown.available) nativeLockdown.release();
 
@@ -370,15 +383,15 @@ app.whenReady().then(() => {
   });
 });
 
-// Cmd+Q lands here. During a session it is turned into a question for the
-// lockdown window rather than an exit.
+// Cmd+Q lands here. During a session it becomes a question for the lockdown
+// window — or, while the timer runs, a flat no.
 app.on('before-quit', (event) => {
   if (allowQuit) return;
   if (!lockdownWindow || lockdownWindow.isDestroyed()) return;
 
   event.preventDefault();
   lockdownWindow.focus();
-  lockdownWindow.webContents.send('lockdown:confirm-exit');
+  lockdownWindow.webContents.send('lockdown:confirm-exit', { locked: timerRunning() });
 });
 
 // Second layer. Anything that reaches quit without going through the hold
@@ -435,10 +448,8 @@ ipcMain.handle('session:start', async (_event, request) => {
   // Ids are what the lockdown window sees. Paths stay in the main process.
   const files = accepted.map((file, index) => ({ ...file, id: `f${index}` }));
 
-  session = {
-    files,
-    startedAt: Date.now()
-  };
+  session = { files, startedAt: Date.now() };
+  lockUntil = null;
 
   fileProtocol.setAllowlist(files);
 
@@ -473,10 +484,40 @@ ipcMain.handle('lockdown:session', () => {
   };
 });
 
-// The single exit, reached only after a completed 30 second hold. The window
-// runs the timer; this just trusts it, because the window is our own code and
-// has no console to be driven from.
+// The window polls this to draw its countdown. `now` comes along so the window
+// measures against the same clock rather than assuming they agree.
+ipcMain.handle('lockdown:timer', () => ({
+  lockUntil,
+  now: Date.now(),
+  running: timerRunning()
+}));
+
+// One way only. Once armed there is no disarming short of waiting it out.
+ipcMain.handle('lockdown:arm', (_event, minutes) => {
+  if (timerRunning()) {
+    return { ok: false, error: 'A timer is already running.' };
+  }
+
+  const value = Number(minutes);
+  if (!Number.isInteger(value) || value < 1 || value > MAX_TIMER_MINUTES) {
+    return { ok: false, error: 'Set a length between 1 minute and 8 hours.' };
+  }
+
+  lockUntil = Date.now() + value * 60_000;
+  console.log(`[DeepWork] timer armed for ${value} min — no exit until it finishes`);
+
+  return { ok: true, lockUntil, now: Date.now() };
+});
+
+// The single exit: a completed 30 second hold, and only once any timer has run
+// out. The window runs the hold; the refusal is here, where it can't be talked
+// out of it.
 ipcMain.handle('lockdown:exit', () => {
+  if (timerRunning()) {
+    console.log('[DeepWork] exit refused — timer still running');
+    return { ok: false, error: 'The lockdown timer is still running.' };
+  }
+
   allowQuit = true;
   releaseLockdown();
 
@@ -487,4 +528,6 @@ ipcMain.handle('lockdown:exit', () => {
     destroyLockdownWindows();
     app.quit();
   });
+
+  return { ok: true };
 });
