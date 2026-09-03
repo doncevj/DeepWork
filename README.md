@@ -201,4 +201,7 @@ After changing `lockdown_mac.mm`, rebuild with `npx node-gyp rebuild`.
 
 ## License
 
-Not yet licensed.
+MIT — see [LICENSE](LICENSE).
+
+Built with [Electron](https://www.electronjs.org) and
+[pdf.js](https://mozilla.github.io/pdf.js/), both Apache 2.0.
